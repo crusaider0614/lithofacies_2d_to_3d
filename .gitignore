@@ -1,3 +1,4 @@
 data/**
 checkpoint/**
-**/__pychache__
+**/__pychache__/**
+.idea

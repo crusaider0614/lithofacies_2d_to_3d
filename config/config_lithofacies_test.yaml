@@ -1,8 +1,8 @@
-TAG: "lithofacies_prediction_25.0"
+TAG: "lithofacies_prediction_7.5_nnorm"
 CUDNN_BENCHMARK: True
 SEED: 654326212
 DEVICE: "cuda"
-GPUS: [ 6, 7, 8, 9 ]
+GPUS: [ 1, 2, 3, 4 ]
 
 PRETRAIN:
   LOAD: False
@@ -21,7 +21,7 @@ DATASET:
   TRAIN_CROP_SIZE: [ 756, 512 ]
   VALID_CROP_SIZE: [ 756, 512 ]
   VDT: 12.5
-  TDT: 25.0
+  TDT: 7.5
   TRAIN_NUM_DATA: 4000
   VALID_NUM_DATA: 400
   FLIP: True
@@ -33,7 +33,7 @@ MODEL:
   B_CHANNELS: 6
   INFO_CHANNELS: 1
   GEN_CHANNELS: 32
-  GEN_NORM: True
+  GEN_NORM: False
   GEN_ATTN: True
 
 TRAIN:
