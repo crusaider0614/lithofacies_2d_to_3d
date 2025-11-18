@@ -1,4 +1,5 @@
 data/**
 checkpoint/**
-**/__pychache__/**
+**/__pycache__/**
 .idea
+!**/.gitkeep
