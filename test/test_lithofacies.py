@@ -20,7 +20,7 @@ with open(config_file, "rt") as f_read:
     CF = yacs.config.load_cfg(f_read)
 device = torch.device("cuda:9")
 tag = CF.TAG
-# tag = "lithofacies_prediction_12.5"
+# tag = "lithofacies_prediction_12.5_unb"
 # tag = "lithofacies_prediction_25.0_nnorm"
 print("Tag:", tag)
 
@@ -32,7 +32,7 @@ plt.plot(train_losses)
 plt.plot(valid_losses)
 plt.show()
 
-exit()
+state = torch.load(os.path.join(get_project_root(), "checkpoint", tag + "_" + str(np.argmin(valid_losses) + 1).zfill(3)), map_location=lambda storage, loc: storage)
 
 # Load
 network = get_gen_model(CF, additional_channel=0).to(device)
@@ -47,11 +47,12 @@ test_dataset = LithofaciesDataset(
     target_idx=CF.DATASET.VALID_IDX,
     vdt=CF.DATASET.VDT,
     tdt=CF.DATASET.TDT,
-    crop_size=(768, 512),
+    crop_size=CF.DATASET.VALID_CROP_SIZE,
     total_length=10,
     is_coordi=True,
-    is_flip=CF.DATASET.FLIP,
-    noise=CF.DATASET.NOISE,
+    is_flip=False,
+    is_scale=False,
+    noise=0.0,
 )
 test_loader = DataLoader(test_dataset, batch_size=1, shuffle=True, drop_last=True)
 
@@ -75,6 +76,7 @@ with torch.no_grad():
         vt = vt[0].cpu().numpy().squeeze()
         ft = ft[0].cpu().numpy().squeeze()
         fo = fo[0].cpu().numpy().squeeze()
+        fo[ft == 0] = 0
         hb = -np.ones((vt.shape[0], 4))
 
         # imgs = np.concatenate((

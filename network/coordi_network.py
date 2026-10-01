@@ -238,17 +238,17 @@ class InfoUNet(nn.Module):
         )
 
         self.center = nn.Sequential(
-            FPA(8 * channels, 1 * channels, is_norm=is_norm),
+            FPA(8 * channels, 8 * channels, is_norm=is_norm),
             nn.AvgPool2d(2, 2),
         )
 
-        self.decode5 = InfoDecodeBlock(1 * channels, 8 * channels, 1 * channels, is_norm=is_norm, is_attn=is_attn, attn_kernel=3)
-        self.decode4 = InfoDecodeBlock(1 * channels, 4 * channels, 1 * channels, is_norm=is_norm, is_attn=is_attn, attn_kernel=3)
-        self.decode3 = InfoDecodeBlock(1 * channels, 2 * channels, 1 * channels, is_norm=is_norm, is_attn=is_attn, attn_kernel=5)
+        self.decode5 = InfoDecodeBlock(8 * channels, 8 * channels, 4 * channels, is_norm=is_norm, is_attn=is_attn, attn_kernel=3)
+        self.decode4 = InfoDecodeBlock(4 * channels, 4 * channels, 2 * channels, is_norm=is_norm, is_attn=is_attn, attn_kernel=3)
+        self.decode3 = InfoDecodeBlock(2 * channels, 2 * channels, 1 * channels, is_norm=is_norm, is_attn=is_attn, attn_kernel=5)
         self.decode2 = InfoDecodeBlock(1 * channels, 1 * channels, 1 * channels, is_norm=is_norm, is_attn=is_attn, attn_kernel=5)
 
         self.logit = nn.Sequential(
-            nn.Conv2d(4 * channels, out_channels, 1, stride=1, padding=0),
+            nn.Conv2d(8 * channels, out_channels, 1, stride=1, padding=0),
         )
 
     def forward(self, x, info):
@@ -280,6 +280,35 @@ class InfoUNet(nn.Module):
         return logit
 
 
+class DiceLoss(nn.Module):
+    def __init__(self, ignore_index=0, ignore_classes=None, smooth=1.0):
+        super().__init__()
+        self.ignore_index = ignore_index
+        self.ignore_classes = [] if ignore_classes is None else ignore_classes
+        self.smooth = smooth
+
+    def forward(self, logits, targets):
+        num_classes = logits.shape[1]
+        probs = F.softmax(logits, dim=1)
+
+        safe_targets = torch.where(targets == self.ignore_index, torch.zeros_like(targets), targets)
+        targets_onehot = F.one_hot(safe_targets, num_classes).permute(0, 3, 1, 2).float()
+
+        mask = (targets != self.ignore_index).unsqueeze(1).float()
+
+        dice = 0.0
+        count = 0
+        for c in range(num_classes):
+            if c == self.ignore_index or c in self.ignore_classes:
+                continue
+            p = probs[:, c] * mask.squeeze(1)
+            t = targets_onehot[:, c] * mask.squeeze(1)
+            intersection = (p * t).sum()
+            dice += (2 * intersection + self.smooth) / (p.sum() + t.sum() + self.smooth)
+            count += 1
+        return 1.0 - dice / max(count, 1)
+
+
 def get_gen_model(cfg, additional_channel=0):
     model = InfoUNet(
         cfg.MODEL.A_CHANNELS + additional_channel,
@@ -301,15 +330,15 @@ if __name__ == "__main__":
     device = "cuda:0"
 
     batch_size = 1
-    gen = InfoUNet(1, 0, 32, 6, is_norm=True, is_attn=True)
+    gen = InfoUNet(1, 1, 32, 6, is_norm=True, is_attn=True)
     gen.apply(init_weights)
     gen = gen.to(device)
 
-    x = torch.randn(batch_size, 1, 320, 320).to(device)
-    print(x[:, 0: 0].shape)
-    info = torch.randn(batch_size, 0, 320, 320).to(device)
-    y = gen(x, x[:, 0: 0])
+    x = torch.randn(batch_size, 1, 512, 512).to(device)
+    info = torch.randn(batch_size, 1, 512, 512).to(device)
+    y = gen(x, info)
     # # y = y[:, :, :32, :32, :32]
     # # info = info[:, :, :32, :32, :32]
+    print(x.shape)
     print(y.shape)
     # print(y.shape)

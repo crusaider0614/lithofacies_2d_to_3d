@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader, DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from module.dataset import LithofaciesDataset
-from network.coordi_network import get_gen_model
+from network.coordi_network import get_gen_model, DiceLoss
 from utils.project import get_project_root, ValueTracker
 from utils.parallel import setup, cleanup, run_target
 from utils.pytorch import init_weights
@@ -65,6 +65,7 @@ def train(rank, world_size, CF):
         total_length=CF.DATASET.TRAIN_NUM_DATA,
         is_coordi=True,
         is_flip=CF.DATASET.FLIP,
+        is_scale=CF.DATASET.SCALE,
         noise=CF.DATASET.NOISE,
     )
     train_sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank, shuffle=True, drop_last=True)
@@ -91,8 +92,9 @@ def train(rank, world_size, CF):
         crop_size=CF.DATASET.VALID_CROP_SIZE,
         total_length=CF.DATASET.VALID_NUM_DATA,
         is_coordi=True,
-        is_flip=CF.DATASET.FLIP,
-        noise=CF.DATASET.NOISE,
+        is_flip=False,
+        is_scale=False,
+        noise=0.0,
     )
     valid_sampler = DistributedSampler(valid_dataset, num_replicas=world_size, rank=rank, shuffle=True, drop_last=True)
     valid_loader = DataLoader(
@@ -109,10 +111,13 @@ def train(rank, world_size, CF):
     if is_parallel:
         network = DDP(network, device_ids=[rank], find_unused_parameters=True)
 
-    train_criterion = nn.CrossEntropyLoss(ignore_index=0, label_smoothing=0.1).to(rank)
-    valid_criterion = nn.CrossEntropyLoss(ignore_index=0, label_smoothing=0.0).to(rank)
+    class_weight = torch.tensor([0.0, 0.0, 2.0, 2.0, 1.0, 1.0], dtype=torch.float32)
+    train_criterion = nn.CrossEntropyLoss(ignore_index=0, weight=class_weight, label_smoothing=0.1).to(rank)
+    valid_criterion = nn.CrossEntropyLoss(ignore_index=0, weight=class_weight, label_smoothing=0.0).to(rank)
+    dice_criterion = DiceLoss(ignore_index=0, ignore_classes=[1]).to(rank)
+    lambda_dice = 0.1
     optimizer = optim.AdamW(network.parameters(), lr=CF.TRAIN.LR, betas=(CF.TRAIN.BETA1, CF.TRAIN.BETA2), weight_decay=0.01)
-    lr_scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=CF.TRAIN.LR_EXP)
+    lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=CF.TRAIN.END_EPOCH, eta_min=CF.TRAIN.LR / 100)
 
     train_losses = []
     valid_losses = []
@@ -147,17 +152,14 @@ def train(rank, world_size, CF):
             ft = ft.to(rank, non_blocking=True)
             cd = cd.to(rank, non_blocking=True)
 
-            # ft[ft == 1] = 0
-            # ft[ft == 2] = 0
-
             fo = network(vt, cd)
 
-            loss = train_criterion(fo, ft)
+            train_loss = train_criterion(fo, ft) + lambda_dice * dice_criterion(fo, ft)
 
-            avg_train_loss.feed(loss.detach().item())
+            avg_train_loss.feed(train_loss.detach().item())
 
             optimizer.zero_grad()
-            loss.backward()
+            train_loss.backward()
             optimizer.step()
 
             if rank == 0 and ((i_batch + 1) % 10 == 0 or (i_batch + 1) == n_batch):
@@ -171,22 +173,19 @@ def train(rank, world_size, CF):
         valid_loss_sum = 0
         network.eval()
         with torch.no_grad():
-            n_batch = 0
+            count = 0
             for i_batch, (vt, ft, cd) in enumerate(valid_loader):
                 vt = vt.to(rank, non_blocking=True)
                 ft = ft.to(rank, non_blocking=True)
                 cd = cd.to(rank, non_blocking=True)
 
-                # ft[ft == 1] = 0
-                # ft[ft == 2] = 0
-
                 fo = network(vt, cd)
 
-                segmentation_loss = valid_criterion(fo, ft)
-                torch.distributed.all_reduce(segmentation_loss, op=torch.distributed.ReduceOp.SUM)
-                valid_loss_sum += segmentation_loss.detach().item()
-                n_batch += world_size
-            valid_loss = valid_loss_sum / n_batch
+                valid_loss = valid_criterion(fo, ft) + lambda_dice * dice_criterion(fo, ft)
+                torch.distributed.all_reduce(valid_loss, op=torch.distributed.ReduceOp.SUM)
+                valid_loss_sum += valid_loss.detach().item()
+                count += world_size
+            valid_loss = valid_loss_sum / count
 
             if rank == 0:
                 print("epoch: {:4}, valid_loss: {:8.3e}".format(
