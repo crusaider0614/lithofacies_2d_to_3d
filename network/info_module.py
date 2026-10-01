@@ -15,15 +15,3 @@ class InfoChannelAppend2d(nn.Module):
         else:
             res = torch.cat((x, info), dim=1)
         return res
-
-
-class InfoPass(nn.Module):
-    def __init__(self, network):
-        super(InfoPass, self).__init__()
-
-        self.network = network
-
-    def forward(self, input_tuple):
-        x, info = input_tuple
-        out = self.network(x)
-        return out, info

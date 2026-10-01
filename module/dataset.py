@@ -8,12 +8,6 @@ from module.seismic_data import SeismicVolume, Coordinate, distance
 from utils.project import get_project_root
 
 
-data_shapes = {
-    "3dn_process": (1001, 2667, 1200),
-    "3dn_facies_newclass": (1001, 2667, 1200)
-}
-
-
 def get_random_boundary_idx(nx, ny, exclude_edge=None):
     edges = {
         1: [(i, 0) for i in range(nx)],
@@ -93,6 +87,12 @@ class LithofaciesDataset(Dataset):
             self.facies_data = None
         nz, nx, ny = self.volume_data.shape
 
+        # NOTE: self.volume_data is loaded straight from .npy above and assigned
+        # here as-is -- unlike SeismicVolume's own tag-based constructor (see
+        # module/seismic_data.py), this does NOT divide by the "amp" value
+        # from the .nphead sidecar. Verify this is intentional (e.g. the .npy
+        # files are already normalized) before relying on amplitude scale
+        # being consistent with code paths that go through that constructor.
         self.volume_class = SeismicVolume()
         self.volume_class.clean_data(shape=(nz, nx, ny))
         self.volume_class.set_coordi(
@@ -265,44 +265,3 @@ class LithofaciesDataset(Dataset):
             info = np.concatenate(info_list, axis=0)
             output = output + (info,)
         return output[0] if len(output) == 1 else output
-
-
-if  __name__ == "__main__":
-    from torch.utils.data import DataLoader
-    import torch
-    from utils.data import show_2d_array
-
-    train_set = LithofaciesDataset(
-        data_pool="southsea",
-        volume_tag="3dn_tbcut",
-        facies_tag="3dn_facies_unc",
-        target_idx=(0, 2667),
-        vdt=25.0,
-        tdt=25.0,
-        crop_size=(256, 256),
-        total_length=2000,
-        is_coordi=False,
-        is_inst_phase=True,
-        is_inst_freq=True,
-        is_flip=True,
-        is_scale=True,
-        noise=0.01,
-    )
-    train_loader = DataLoader(train_set, batch_size=1, shuffle=False)
-
-    import time
-    with torch.no_grad():
-        start_time = time.time()
-        for i, (vt, ft, info) in enumerate(train_loader):
-            print(time.time() - start_time)
-
-            vt = vt[0].cpu().numpy().squeeze()
-            ft = ft[0].cpu().numpy().squeeze() / 5
-            ips = info[0, 0].cpu().numpy().squeeze()
-            ifs = info[0, 1].cpu().numpy().squeeze()
-            hb = np.zeros((vt.shape[0], 4))
-
-            imgs = np.concatenate((
-                vt, hb, ft, hb, ips, hb, ifs,
-            ), axis=1)
-            show_2d_array(imgs, scale=100)

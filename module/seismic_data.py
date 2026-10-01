@@ -68,30 +68,13 @@ class Coordinate:
         return abs(self.cx - other.cx) < 1e-8 and abs(self.cy - other.cy) < 1e-8
 
     def __abs__(self):
-        return (self.cx * self.cx + self.cy + self.cy)**0.5
+        return (self.cx * self.cx + self.cy * self.cy)**0.5
 
     def __hash__(self):
         return hash((self.cx, self.cy))
 
-    def transpose(self):
-        return Coordinate(self.cy, self.cx)
-
-    def conj(self):
-        return Coordinate(self.cx, -self.cy)
-
-    def hilbert(self):
-        return Coordinate(self.cy, -self.cx)
-
     def sum(self):
         return self.cx + self.cy
-
-
-def determinant(coordi1, coordi2):
-    return coordi1.cx * coordi2.cy - coordi1.cy * coordi2.cx
-
-
-def inner_product(coordi1, coordi2):
-    return coordi1.cx * coordi2.cx + coordi1.cy * coordi2.cy
 
 
 def distance(coordi1, coordi2):
@@ -331,11 +314,15 @@ class SeismicLine:
 
             self.read_nphead(head_path)
             self.data = np.load(data_path)
+            # NOTE: normalizes by the "amp" value read from the .nphead sidecar
+            # (written by convert_line_segy_to_numpy). LithofaciesDataset
+            # (module/dataset.py) loads the same .npy files directly via
+            # np.load and does NOT go through this division -- verify whether
+            # that's intentional (e.g. already-normalized data) before relying
+            # on amplitude scale being consistent between the two code paths.
             self.data = self.data / self.amp
             if self.shape != self.data.shape:
-                print(self.shape, self.data.shape)
-                print("Data shape has error!")
-                exit(-1)
+                raise ValueError(f"Data shape mismatch: header says {self.shape}, array is {self.data.shape}")
             self.dp = np.zeros(self.shape[1:], dtype=np.float32)
 
     def read_nphead(self, header_path):
@@ -462,24 +449,6 @@ class SeismicLine:
             self.insert_trace_idx(new_trace, it)
         else:
             print("Too far distance: ", distance)
-
-    def insert_line(self, line):
-        for it in range(line.shape[1]):
-            coordi = line.idx_to_coordi(it)
-            trace = line.get_trace_idx(it)
-            self.insert_trace_coordi(trace, coordi)
-
-    def save_data(self, data_pool, tag):
-        data_root = os.path.join(get_project_root(), "data", data_pool)
-        np.save(os.path.join(data_root, tag), self.data)
-        with open(os.path.join(data_root, tag + ".nphead"), "w") as f:
-            f.write("shape\t" + str(self.shape[0]) + "\t" + str(self.shape[1]) + "\n")
-            f.write("amp\t" + str(self.amp) + "\n")
-            f.write("dz\t" + str(self.dz) + "\n")
-            f.write("\n" + "trace coordi" + "\n")
-            for it in range(self.shape[1]):
-                coordi = self.idx_to_coordi(it)
-                f.write(str(it) + "\t" + str(coordi.cx) + "\t" + str(coordi.cy) + "\n")
 
 
 # This subroutine must be modified according to the SEG-Y file format.
@@ -612,12 +581,15 @@ class SeismicVolume:
 
             self.read_nphead(head_path)
             self.data = np.load(data_path)
-            print(np.max(np.abs(self.data)))
+            # NOTE: normalizes by the "amp" value read from the .nphead sidecar
+            # (written by convert_volume_segy_to_numpy). LithofaciesDataset
+            # (module/dataset.py) loads the same .npy files directly via
+            # np.load and does NOT go through this division -- verify whether
+            # that's intentional (e.g. already-normalized data) before relying
+            # on amplitude scale being consistent between the two code paths.
             self.data = self.data / self.amp
             if self.shape != self.data.shape:
-                print(self.shape, self.data.shape)
-                print("Data shape has error!")
-                exit(-1)
+                raise ValueError(f"Data shape mismatch: header says {self.shape}, array is {self.data.shape}")
             self.dp = np.ones(self.shape[1:], dtype=np.float32)
 
     def read_nphead(self, header_path):
@@ -665,17 +637,6 @@ class SeismicVolume:
                 [Coordinate(x[0], x[1]), Coordinate(x[2], x[3])],
                 [Coordinate(x[4], x[5]), Coordinate(x[6], x[7])],
             ]
-
-            # plt.scatter(b[0::2], b[1::2], s=3, c="red")
-            # xs = []
-            # ys = []
-            # for ix in range(nx):
-            #     for iy in range(ny):
-            #         coordi = self.idx_to_coordi(ix, iy)
-            #         xs.append(coordi.cx)
-            #         ys.append(coordi.cy)
-            # plt.scatter(xs, ys, s=3, c="blue")
-            # plt.show()
 
     def clean_data(self, shape=None):
         if shape is None:
@@ -862,19 +823,6 @@ class SeismicVolume:
                     self.data[:, int(np.ceil(ix)), int(np.ceil(iy))] = add_weighted_avg(propro_trace, propro_weight, new_trace, x_portion * y_portion)
                     self.dp[int(np.ceil(ix)), int(np.ceil(iy))] += x_portion * y_portion
 
-    def get_dimension(self):
-        xf = distance(self.corner_coordi[0][0], self.corner_coordi[1][0])
-        xe = distance(self.corner_coordi[0][1], self.corner_coordi[1][1])
-
-        yf = distance(self.corner_coordi[0][0], self.corner_coordi[0][1])
-        ye = distance(self.corner_coordi[1][0], self.corner_coordi[1][1])
-
-        return (xf, xe), (yf, ye)
-
-    def check_coordi_inside(self, coordi):
-        ix, iy = self.coordi_to_idx(coordi)
-        return 0 <= ix <= self.shape[1] - 1 and 0 <= iy <= self.shape[2] - 1
-
     def insert_trace_coordi(self, new_trace, coordi):
         ix, iy = self.coordi_to_idx(coordi)
         self.insert_trace_idx(new_trace, ix, iy)
@@ -892,133 +840,9 @@ class SeismicVolume:
         line.set_coordi(scoordi, ecoordi)
         return self.get_line(line, mode=mode)
 
-    def get_line_idx(self, sx, sy, ex, ey, nt=None):
-        nt = max(ex - sx, ey - sy) if nt is None else nt
-        scoordi = self.idx_to_coordi(sx, sy)
-        ecoordi = self.idx_to_coordi(ex, ey)
-        return self.get_line_coordi(scoordi, ecoordi, nt)
 
-    def insert_line(self, line):
-        scoordi = line.scoordi
-        ecoordi = line.ecoordi
-
-        ineq00 = determinant(self.corner_coordi[0][0] - scoordi, ecoordi - scoordi) > 0
-        ineq01 = determinant(self.corner_coordi[0][1] - scoordi, ecoordi - scoordi) > 0
-        ineq10 = determinant(self.corner_coordi[1][0] - scoordi, ecoordi - scoordi) > 0
-        ineq11 = determinant(self.corner_coordi[1][1] - scoordi, ecoordi - scoordi) > 0
-
-        if (ineq00 and ineq01 and ineq10 and ineq11) or (not ineq00 and not ineq01 and not ineq10 and not ineq11):
-            return
-
-        for it in range(line.shape[1]):
-            coordi = line.idx_to_coordi(it)
-            trace = line.get_trace_idx(it)
-            self.insert_trace_coordi(trace, coordi)
-
-    def insert_volume(self, volume, is_force=False):
-        conditions = (
-            is_force
-            or any(self.check_coordi_inside(c) for c in (
-                volume.corner_coordi[0][0],
-                volume.corner_coordi[0][1],
-                volume.corner_coordi[1][0],
-                volume.corner_coordi[1][1],
-            ))
-            or any(volume.check_coordi_inside(c) for c in (
-                self.corner_coordi[0][0],
-                self.corner_coordi[0][1],
-                self.corner_coordi[1][0],
-                self.corner_coordi[1][1],
-            ))
-        )
-        if conditions:
-            for ix in range(volume.shape[1]):
-                for iy in range(volume.shape[2]):
-                    coordi = volume.idx_to_coordi(ix, iy)
-                    trace = volume.get_trace_idx(ix, iy)
-                    self.insert_trace_coordi(trace, coordi)
-
-    def save_data(self, data_pool, tag):
-        data_root = os.path.join(get_project_root(), "data", data_pool)
-        np.save(os.path.join(data_root, tag), self.data)
-        with open(os.path.join(data_root, tag + ".nphead"), "w") as f:
-            f.write("shape\t" + str(self.shape[0]) + "\t" + str(self.shape[1]) + "\t" + str(self.shape[2]) + "\n")
-            f.write("amp\t" + str(self.amp) + "\n")
-            f.write("dz\t" + str(self.dz) + "\n")
-            f.write("\n" + "trace coordi" + "\n")
-            for ix in range(self.shape[1]):
-                for iy in range(self.shape[2]):
-                    coordi = self.idx_to_coordi(ix, iy)
-                    f.write(str(ix) + "\t" + str(iy) + "\t" + str(coordi.cx) + "\t" + str(coordi.cy) + "\n")
-
-
-# Usage examples
+# Usage example: batch-convert a directory of 2D SEG-Y lines to .npy + .nphead
 if __name__ == "__main__":
-    from utils.data import show_2d_array
-
-    "show raw facies data"
-    # file_path = os.path.join(get_project_root(), "data", "southsea", "3dn_facies_process.npy")
-    # facies_data_1 = np.load(file_path)
-    # new_facies_data = np.zeros_like(facies_data_1)
-    # new_facies_data[facies_data_1 == 0] = 0
-    # new_facies_data[facies_data_1 == 1] = 2
-    # new_facies_data[facies_data_1 == 2] = 3
-    # new_facies_data[facies_data_1 == 3] = 3
-    # new_facies_data[facies_data_1 == 4] = 3
-    # new_facies_data[facies_data_1 == 5] = 3
-    # new_facies_data[facies_data_1 == 6] = 4
-    # new_facies_data[facies_data_1 == 7] = 5
-    # facies_data = new_facies_data[128: 128 + 768]
-    # # file_path = os.path.join(get_project_root(), "data", "southsea", "3dn_facies_tbcut.npy")
-    # # facies_data_2 = np.load(file_path)
-    # # print(facies_data_1.shape, facies_data_2.shape)
-    # # facies_data = facies_data_2 - new_facies_data[128: 128 + 768]
-    # # facies_data = np.pad(facies_data, ((1001 - 640 - 63, 63), (0, 0), (0, 0)))
-    # np.save(os.path.join(get_project_root(), "data", "southsea", "3dn_facies_unc.npy"), facies_data)
-    # print(facies_data.shape)
-    # print(
-    #     (facies_data == 0).sum(),
-    #     (facies_data == 1).sum(),
-    #     (facies_data == 2).sum(),
-    #     (facies_data == 3).sum(),
-    #     (facies_data == 4).sum(),
-    #     (facies_data == 5).sum(),
-    #     (facies_data == 6).sum(),
-    #     (facies_data == 7).sum(),
-    # )
-    # for i in range(50, 2000, 100):
-    #     img = facies_data[:, i]
-    #     show_2d_array(img, scale=200, vmin=0, vmax=7, cmap="gray")
-    # exit()
-    #
-    # facies_data = np.load(os.path.join(get_project_root(), "data", "southsea", "3dn_facies_fillbot.npy"))
-    # print(facies_data.shape)
-    # nz, nx, ny = facies_data.shape
-    #
-    # new_facies_data = np.zeros_like(facies_data)
-    # new_facies_data[facies_data == 0] = 0
-    # new_facies_data[facies_data == 1] = 2
-    # new_facies_data[facies_data == 2] = 3
-    # new_facies_data[facies_data == 3] = 3
-    # new_facies_data[facies_data == 4] = 3
-    # new_facies_data[facies_data == 5] = 3
-    # new_facies_data[facies_data == 6] = 4
-    # new_facies_data[facies_data == 7] = 5
-    #
-    # nonzero = new_facies_data != 0
-    # has_nonzero = nonzero.any(axis=0)
-    # first_idx = np.argmax(nonzero, axis=0)
-    # z = np.arange(nz)[:, None, None]
-    # leading_top = (z < first_idx) & has_nonzero[None]
-    # new_facies_data[leading_top & (new_facies_data == 0)] = 1
-    #
-    # np.save(os.path.join(get_project_root(), "data", "southsea", "3dn_facies_newclass.npy"), new_facies_data)
-    #
-    # "show numpy data"
-    # for i in range(50, 2000, 100):
-    #     img = new_facies_data[:, i]
-    #     show_2d_array(img, scale=200, vmin=0, vmax=5, cmap="gray")
-
     file_path = os.path.join(get_project_root(), "data", "ssealine_matched")
     file_list = os.listdir(file_path)
     for file in file_list:

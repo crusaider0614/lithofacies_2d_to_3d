@@ -32,6 +32,15 @@ def main(config):
 def train(rank, world_size, CF):
     setup(rank, world_size, 19982)
 
+    try:
+        _train(rank, world_size, CF)
+    finally:
+        # Always tear down the NCCL process group, even if training raised
+        # (e.g. CUDA OOM) partway through -- otherwise it leaks.
+        cleanup()
+
+
+def _train(rank, world_size, CF):
     tag = CF.TAG
     if rank == 0:
         print("Tag:", tag)
@@ -47,9 +56,9 @@ def train(rank, world_size, CF):
             device = torch.device("cuda")
             torch.cuda.set_device(rank)
         else:
-            exit(1)
+            raise ValueError(f"CF.GPUS must be non-empty when CF.DEVICE == 'cuda', got: {CF.GPUS}")
     else:
-        exit(1)
+        raise ValueError(f"Unsupported CF.DEVICE: {CF.DEVICE!r} (expected 'cpu' or 'cuda')")
 
     if rank == 0:
         print("Number of GPU:", world_size)
@@ -145,6 +154,9 @@ def train(rank, world_size, CF):
         start_time = time.time()
 
         # Training
+        # DistributedSampler shuffles using seed + epoch; without this, every
+        # epoch would use the exact same shuffle order.
+        train_sampler.set_epoch(i_epoch)
         avg_train_loss.initialize()
         network.train()
         for i_batch, (vt, ft, cd) in enumerate(train_loader):
@@ -170,6 +182,7 @@ def train(rank, world_size, CF):
                 ))
 
         # Validation
+        valid_sampler.set_epoch(i_epoch)
         valid_loss_sum = 0
         network.eval()
         with torch.no_grad():
@@ -214,8 +227,6 @@ def train(rank, world_size, CF):
                 i_epoch + 1,
                 time.time() - start_time,
             ))
-
-    cleanup()
 
 
 if __name__ == "__main__":

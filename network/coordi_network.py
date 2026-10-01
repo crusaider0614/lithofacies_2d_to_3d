@@ -1,13 +1,10 @@
 import os
-from collections import OrderedDict
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.autograd as autograd
 
-from network.info_module import InfoPass, InfoChannelAppend2d
-from torch.nn.utils.parametrizations import spectral_norm
+from network.info_module import InfoChannelAppend2d
 from utils.pytorch import init_weights
 
 
@@ -320,7 +317,7 @@ def get_gen_model(cfg, additional_channel=0):
 
     # load the pre-trained model
     if "PRETRAINED" in cfg.MODEL.keys() and os.path.exists(cfg.MODEL.PRETRAINED) and os.path.isfile(cfg.MODEL.PRETRAINED):
-        trained_model = torch.load(cfg.MODEL.PRETRAINED)
+        trained_model = torch.load(cfg.MODEL.PRETRAINED, map_location=lambda storage, loc: storage)
         trained_model = {k.replace("module.", ""): v for (k, v) in trained_model.items()}
         model.load_state_dict(trained_model, strict=True)
     return model
@@ -337,8 +334,5 @@ if __name__ == "__main__":
     x = torch.randn(batch_size, 1, 512, 512).to(device)
     info = torch.randn(batch_size, 1, 512, 512).to(device)
     y = gen(x, info)
-    # # y = y[:, :, :32, :32, :32]
-    # # info = info[:, :, :32, :32, :32]
     print(x.shape)
     print(y.shape)
-    # print(y.shape)
