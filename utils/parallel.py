@@ -1,3 +1,4 @@
+"""Helpers for single-node multi-GPU training with DistributedDataParallel (NCCL)."""
 import os
 
 import torch.distributed as dist
@@ -5,6 +6,7 @@ import torch.multiprocessing as mp
 
 
 def setup(rank, world_size, port):
+    """Join the process group; called once in each spawned worker."""
     os.environ["MASTER_ADDR"] = "localhost"
     os.environ["MASTER_PORT"] = str(port)
 
@@ -21,6 +23,7 @@ def cleanup():
 
 
 def run_target(target_subroutine, world_size, CF):
+    """Spawn `world_size` workers running target_subroutine(rank, world_size, CF)."""
     mp.spawn(
         target_subroutine,
         args=(world_size, CF),

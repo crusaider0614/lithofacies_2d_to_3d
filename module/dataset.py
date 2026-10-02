@@ -1,3 +1,8 @@
+"""Training dataset: synthetic 2D seismic lines cut from a labeled 3D volume.
+
+Each sample is a straight 2D line through the 3D seismic/facies volumes at a chosen trace
+spacing (tdt), so a network trained on it can be applied to real 2D lines with that spacing.
+"""
 import os
 import random
 
@@ -9,6 +14,11 @@ from utils.project import get_project_root
 
 
 def get_random_boundary_idx(nx, ny, exclude_edge=None):
+    """Random grid point on the boundary of an (nx, ny) grid.
+
+    The edge (1: iy=0, 2: ix=nx-1, 3: iy=ny-1, 4: ix=0) is drawn with probability proportional
+    to its length; `exclude_edge` forbids one edge. Returns (Coordinate, edge id).
+    """
     edges = {
         1: [(i, 0) for i in range(nx)],
         2: [(nx - 1, i) for i in range(ny)],
@@ -30,6 +40,15 @@ def get_random_boundary_idx(nx, ny, exclude_edge=None):
 
 
 def extract_random_line(volume_data, nt, vdt, tdt, scoordi=None, ecoordi=None, mode="bilinear"):
+    """Sample an nt-trace straight line from a SeismicVolume with trace spacing about tdt.
+
+    vdt is the volume's trace spacing and tdt the target 2D trace spacing (same units, metres).
+    Without endpoints, a line is drawn between two random points on different edges of the
+    volume until it is long enough, then a random sub-segment of length (nt - 1) * tdt
+    (jittered by +/-10%) is kept. Passing scoordi/ecoordi reuses those exact endpoints, which
+    is how the matching facies/attribute lines are extracted. Returns (line data of shape
+    (nz, nt), start Coordinate, end Coordinate) in grid-index coordinates.
+    """
     target_distance = (nt - 1) * tdt
     crop_distance = (0.9 + 0.2 * random.random()) * target_distance
     nz, nx, ny = volume_data.shape
@@ -57,6 +76,22 @@ def extract_random_line(volume_data, nt, vdt, tdt, scoordi=None, ecoordi=None, m
 
 
 class LithofaciesDataset(Dataset):
+    """Random synthetic 2D lines (amplitude, facies, info) from 3D volumes under data/<data_pool>/.
+
+    Every __getitem__ call draws a fresh random line, so `idx` is ignored and `total_length`
+    only sets how many samples make one epoch. Arguments:
+      volume_tag / facies_tag: .npy volumes of shape (nz, nx, ny); facies are integer classes.
+      target_idx: (start, end) slice along axis 1, used to split train/validation inlines.
+      vdt / tdt: trace spacing of the 3D volume / of the generated 2D lines (metres).
+      crop_size: (n_samples, n_traces) of each sample.
+      is_coordi / is_inst_phase / is_inst_freq: info channels to return, in that order
+        (normalized depth coordinate, <volume_tag>_inst_phase.npy, <volume_tag>_inst_freq.npy).
+      is_flip / is_scale / noise: augmentation (left-right flip, amplitude x U(0.8, 1.2),
+        additive Gaussian noise with this std), applied to the amplitude only except flip.
+    Returns amplitude (1, H, W) float32, facies (H, W) int64 and info (C, H, W), omitting
+    facies or info when not configured.
+    """
+
     def __init__(
             self,
             data_pool,
@@ -166,6 +201,7 @@ class LithofaciesDataset(Dataset):
             is_withfacies = False
         nz, nx, ny = self.volume_data.shape
 
+        # Redraw the line until it crosses at least one labeled facies sample.
         while True:
             vc_datum, scoordi, ecoordi = extract_random_line(
                 self.volume_class,
@@ -189,6 +225,8 @@ class LithofaciesDataset(Dataset):
                     break
 
         if self.is_crop:
+            # Random depth window; the start may overshoot the ends by nz // 50 and is then
+            # clipped, which slightly favours windows touching the top or bottom.
             mz = nz // 50
             while True:
                 sz = random.randint(-mz, nz - self.crop_size[0] + mz)

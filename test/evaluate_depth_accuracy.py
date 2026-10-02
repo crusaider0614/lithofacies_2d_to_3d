@@ -1,3 +1,31 @@
+"""Depth-wise accuracy figure: prediction accuracy as a function of two-way time.
+
+Uses the same sampling and inference as evaluate_accuracy.py (TDT = 25.0 m model
+checkpoint/lithofacies_prediction_25.0_pat_044; ``n_samples`` random synthetic 2D lines
+from the validation part of the 3D volume, each cropped to 768 x 512 and predicted with
+overlapping 256 x 256 tiles), but accumulates the fraction of correctly predicted labeled
+pixels separately for each depth row of the crop, overall and per class (2-5).
+
+Output figure (two panels, curves smoothed with a 21-sample moving average):
+  (a) overall accuracy vs. two-way time, with a shaded "target zone" (1.5-2.3 s) and
+      "basement boundary" zone (2.4-2.9 s) and the mean accuracy in each;
+  (b) Shale and Sand accuracy vs. two-way time.
+Two-way time assumes the 768-sample crop spans 1-3 s (same axis convention as the
+validation figures). A zone summary is also printed.
+
+Reads:  config/config_lithofacies.yaml, checkpoint/lithofacies_prediction_25.0_pat_044,
+        data/<DATA_POOL>/<VOLUME_TAG>.npy, <FACIES_TAG>.npy,
+        <VOLUME_TAG>_inst_phase.npy, <VOLUME_TAG>_inst_freq.npy.
+Writes: test/validation_figures/tdt_25.0/depth_accuracy.png
+
+Run from the repo root (running by file path fails because the repo root is then not on
+sys.path):
+
+    python -m test.evaluate_depth_accuracy
+
+There is no CLI. Edit the module-level settings (``target_dim``, ``crop_size``, ``device``,
+``n_samples``, ``tdt``, checkpoint path). Seeds are fixed (42), matching evaluate_accuracy.py.
+"""
 import os, random
 import numpy as np
 import torch
@@ -82,6 +110,8 @@ with torch.no_grad():
         if (idx + 1) % 20 == 0:
             print('  Processing', idx + 1, '/', n_samples, '...')
         
+        # Random line + random 768-sample depth window, retried until the window contains
+        # labels; facies and inst. attributes reuse the same line coordinates.
         while True:
             vt, scoordi, ecoordi = extract_random_line(volume_sv, nt, vdt, tdt, mode='bilinear')
             ft, _, _ = extract_random_line(facies_sv, nt, vdt, tdt, scoordi=scoordi, ecoordi=ecoordi, mode='nearest')
@@ -99,17 +129,21 @@ with torch.no_grad():
         if_, _, _ = extract_random_line(inst_freq_sv, nt, vdt, tdt, scoordi=scoordi, ecoordi=ecoordi, mode='bilinear')
         if_ = if_[sz:ez]
         
+        # Rescale the amplitude crop to RMS 0.15 before inference.
         rms = (vt * vt).mean() ** 0.5
         if rms > 0:
             vt = vt / rms * 0.15
-        
+
         vt_tensor = torch.tensor(vt[None, None], dtype=torch.float32, device=device)
+        # 2-channel info input: instantaneous phase, instantaneous frequency.
         info_tensor = torch.tensor(np.stack([ip, if_])[None], dtype=torch.float32, device=device)
-        
+
         fo = predict_section(network, vt_tensor, info_tensor, device, target_dim)
+        # Blank predictions where there is no ground-truth label (class 0).
         fo[ft == 0] = 0
-        
-        # Per-depth accuracy (overall)
+
+        # Per-depth accuracy (overall); rows are depth indices within the crop, and every
+        # labeled pixel (ft != 0, so class 1 included) counts toward the overall curve.
         for d in range(crop_size[0]):
             mask = ft[d, :] != 0
             if mask.sum() > 0:
@@ -136,7 +170,8 @@ for c in classes:
     acc[valid] = depth_class_correct[c][valid] / depth_class_total[c][valid] * 100
     depth_class_accuracy[c] = acc
 
-# Convert depth index to two-way time (seconds)
+# Convert depth index to two-way time (seconds). This is a fixed display mapping (crop row 0
+# -> 1 s, row 767 -> ~3 s); it does not account for the random crop start ``sz``.
 dt_sec = 2.0 / crop_size[0]
 t_start = 1.0
 twt = t_start + np.arange(crop_size[0]) * dt_sec
@@ -144,6 +179,7 @@ twt = t_start + np.arange(crop_size[0]) * dt_sec
 # Smooth curves
 window = 21
 def smooth(arr):
+    """Centred moving average over ``window`` samples (zero-padded at the ends)."""
     return np.convolve(arr, np.ones(window)/window, mode='same')
 
 depth_accuracy_smooth = smooth(depth_accuracy)

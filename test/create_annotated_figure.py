@@ -1,3 +1,30 @@
+"""Annotated validation figure: one synthetic 2D line with interpretive annotations.
+
+Draws a single random synthetic 2D line (seed 123) from the validation part of the 3D
+volume at TDT = 25.0 m, takes its top 768 samples x 512 traces, predicts it with the
+TDT = 25.0 m model (checkpoint/lithofacies_prediction_25.0_pat_044) using overlapping
+256 x 256 tiles, and saves a 3-panel figure in the style of create_validation_figures.py:
+(a) seismic with a "target depth range" bracket and "Fault" / "Chaotic basement" labels,
+(b) ground truth with an optional map inset of the line location, (c) prediction with
+the two largest misclassified regions circled in (b) and (c).
+
+Note: the annotation positions in panel (a) are fixed fractions of the panel size, not
+detected features; they were placed for the specific line drawn with seed 123.
+
+Reads:  config/config_lithofacies.yaml, checkpoint/lithofacies_prediction_25.0_pat_044,
+        data/<DATA_POOL>/<VOLUME_TAG>.npy, <FACIES_TAG>.npy,
+        <VOLUME_TAG>_inst_phase.npy, <VOLUME_TAG>_inst_freq.npy, and optionally
+        test/validation_figures/tdt_25.0/devided_volume.png (map image for the inset).
+Writes: test/validation_figures/tdt_25.0/annotated_example.png
+
+Run from the repo root (running by file path fails because the repo root is then not on
+sys.path):
+
+    python -m test.create_annotated_figure
+
+There is no CLI. Edit the module-level settings (seeds, ``target_dim``, ``crop_size``,
+``device``, ``tdt``, checkpoint path).
+"""
 import os, random
 import numpy as np
 import torch
@@ -18,6 +45,13 @@ plt.rcParams['figure.dpi'] = 300
 def create_annotated_figure(seismic, ground_truth, prediction, output_path,
                             scoordi=None, ecoordi=None, volume_img_path=None,
                             nx_volume=667, ny_volume=1200, tdt=25.0):
+    """Save a 3-panel (seismic / ground truth / prediction) figure with annotations.
+
+    Arguments are as in ``create_validation_figures.create_validation_figure``. In addition,
+    panel (a) gets fixed-position interpretive labels, and connected regions where both
+    ground truth and prediction are labeled but disagree are found with
+    ``scipy.ndimage.label``; the two largest (if > 50 pixels) are circled in (b) and (c).
+    """
     img_height, img_width = seismic.shape
     
     panel_aspect = img_height / img_width
@@ -256,22 +290,27 @@ with torch.no_grad():
         vt, scoordi, ecoordi = extract_random_line(volume_sv, nt, vdt, tdt, mode='bilinear')
         ft, _, _ = extract_random_line(facies_sv, nt, vdt, tdt, scoordi=scoordi, ecoordi=ecoordi, mode='nearest')
         ft = np.round(ft).astype(np.int32)
+        # Unlike the other evaluation scripts, the depth window is always the top
+        # crop_size[0] samples (no random depth offset).
         if np.any(ft[:crop_size[0]] != 0):
             break
-    
+
     vt, ft = vt[:crop_size[0]], ft[:crop_size[0]]
     ip, _, _ = extract_random_line(inst_phase_sv, nt, vdt, tdt, scoordi=scoordi, ecoordi=ecoordi, mode='bilinear')
     if_, _, _ = extract_random_line(inst_freq_sv, nt, vdt, tdt, scoordi=scoordi, ecoordi=ecoordi, mode='bilinear')
     ip, if_ = ip[:crop_size[0]], if_[:crop_size[0]]
     
+    # Rescale the amplitude crop to RMS 0.15 before inference.
     rms = (vt * vt).mean() ** 0.5
     if rms > 0:
         vt = vt / rms * 0.15
-    
+
     vt_tensor = torch.tensor(vt[None, None], dtype=torch.float32, device=device)
+    # 2-channel info input: instantaneous phase, instantaneous frequency.
     info_tensor = torch.tensor(np.stack([ip, if_])[None], dtype=torch.float32, device=device)
-    
+
     fo = predict_section(network, vt_tensor, info_tensor, device, target_dim)
+    # Blank predictions where there is no ground-truth label (class 0).
     fo[ft == 0] = 0
     
     output_dir = os.path.join(get_project_root(), 'test', 'validation_figures', 'tdt_{:.1f}'.format(tdt))

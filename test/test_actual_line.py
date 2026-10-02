@@ -1,3 +1,33 @@
+"""Inference on real (field) 2D seismic lines.
+
+Applies the trained models to the real 2D lines stored in data/ssealine_matched/. For each
+line listed in ``idx_range``:
+  1. load the line (<n>.npy amplitude + <n>.nphead header with trace coordinates; see
+     module.seismic_data.SeismicLine), keep at most the first 1001 samples and the trace
+     range given in ``idx_range`` (reflect-padding to 256 traces if the line is narrower);
+  2. compute the line's trace spacing from its end coordinates and pick the model whose
+     training trace spacing TDT (7.5 / 12.5 / 25.0 m) is nearest to it;
+  3. rescale the section to RMS 0.15 and compute the 2-channel info input from it
+     (sin of the unwrapped Hilbert phase, and instantaneous frequency clipped at its 99th
+     percentile and scaled to [-1, 1]), as compute_inst_attribute.py does for the 3D volume;
+  4. predict with overlapping 256 x 256 tiles blended by a raised-cosine window, and
+     display prediction above amplitude.
+Writing the prediction to SEG-Y (data/ssealine_matched/lithofacies/new_<idx>.segy) is
+present but commented out at the end of the loop.
+
+Reads:  config/config_lithofacies.yaml,
+        checkpoint/lithofacies_prediction_7.5_pat_047, ..._12.5_pat_049, ..._25.0_pat_044,
+        data/ssealine_matched/<idx + 1>.npy and <idx + 1>.nphead.
+Writes: nothing while the SEG-Y export is commented out; figures are shown on screen.
+
+Run from the repo root (running by file path fails because the repo root is then not on
+sys.path):
+
+    python -m test.test_actual_line
+
+There is no CLI. Edit the module-level settings (``device``, checkpoint tags/epochs,
+``idx_range``).
+"""
 import os
 import random
 import numpy as np
@@ -14,11 +44,18 @@ from obspy.core import Trace, Stream
 
 
 def add_weighted_avg(average, weight, new_sample, new_weight):
+    """Fold one tile prediction (logits ``new_sample``, window ``new_weight``) into the
+    running weighted average ``average`` with accumulated weight ``weight``."""
     new_average = (weight[None] * average + new_weight[None] * new_sample) / (weight[None] + new_weight[None])
     return new_average, weight + new_weight
 
 
 def read_trace_coordinates(file_path):
+    """Read per-trace (x, y) coordinates from a .nphead file.
+
+    Skips the 5 header lines; each following line is "<trace_idx> <x> <y>".
+    Returns an (n_traces, 2) array.
+    """
     coords = []
     with open(file_path, 'r') as f:
         lines = f.readlines()
@@ -30,6 +67,8 @@ def read_trace_coordinates(file_path):
     return np.array(coords)
 
 
+# Tile size (= training crop size) and the 2D raised-cosine blending window for overlap-add
+# tiling: ~1 at the tile centre, ~0 at its edges.
 target_dim = 256
 weight = np.array([(1 + np.cos((i - (target_dim // 2 - 0.5)) / (target_dim // 2) * np.pi)) / 2 for i in range(target_dim)])
 weight = weight[None] * weight[:, None]
@@ -41,7 +80,7 @@ with open(config_file, "rt") as f_read:
 # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 device = torch.device("cuda:5")
 
-# Load
+# Load one model per training trace spacing (epochs = minimum validation loss).
 tag = "lithofacies_prediction_7.5_pat"
 epoch = 47
 network_1 = get_gen_model(CF, additional_channel=0).to(device)
@@ -63,9 +102,12 @@ state = torch.load(os.path.join(get_project_root(), "checkpoint", tag + "_" + st
 network_3.load_state_dict(state["network"])
 network_3 = network_3.eval()
 
-sample_interval = 4000
-dt = 0.004
+sample_interval = 4000  # microseconds, for the (commented-out) SEG-Y export
+dt = 0.004  # sample interval in seconds
 
+# Lines to process: {line index: (first trace, end trace)}; end trace -1 means "to the end".
+# The trace windows trim unusable parts of each line. The data file loaded for key idx is
+# data/ssealine_matched/<idx + 1>.npy (1-based file names).
 idx_range = {
     65: (0, -1),
     66: (0, -1),
@@ -153,12 +195,15 @@ for idx in idx_range.keys():
     # print(idx)
 
     line = SeismicLine(data_pool="ssealine_matched", tag=str(idx + 1))
+    # Mean trace spacing of the line (m), from its fitted start/end coordinates.
     ldt = distance(line.scoordi, line.ecoordi) / (line.shape[1] - 1)
 
     nphead_path = os.path.join(get_project_root(), "data", "ssealine_matched", str(idx + 1) + ".nphead")
     coordinate = read_trace_coordinates(nphead_path)
 
+    # Choose the training trace spacing nearest to the line's own spacing.
     tdt = min([7.5, 12.5, 25.0], key=lambda x: abs(ldt - x))
+    # Keep at most the first 1001 time samples.
     if line.shape[0] <= 1001:
         vt = line.data
     else:
@@ -172,6 +217,7 @@ for idx in idx_range.keys():
     iex = idx_range[idx][1] if idx_range[idx][1] > 0 else vt.shape[1]
     vt = vt[:, isx: iex]
 
+    # Lines narrower than one tile are reflect-padded to target_dim traces.
     if vt.shape[1] < target_dim:
         is_pad = True
         wp = target_dim - vt.shape[1]
@@ -180,8 +226,10 @@ for idx in idx_range.keys():
         vt = np.pad(vt, pad_width=((0, 0), (lp, rp)), mode="reflect")
     else:
         is_pad = False
+    # Rescale the amplitude section to RMS 0.15 before inference.
     vt = vt / (vt * vt).mean()**0.5 * 0.15
 
+    # Select the model trained at the chosen TDT (7.5 / 12.5 / 25.0 m).
     if tdt < 10:
         network = network_1
     elif tdt < 15:
@@ -197,6 +245,8 @@ for idx in idx_range.keys():
     fo = np.zeros_like(vt, dtype=np.float32)
     fo = np.repeat(fo[None], 6, axis=0)
 
+    # Instantaneous attributes per trace from the analytic (Hilbert) signal; each trace is
+    # reflect-padded by 500 samples to suppress edge effects, and dead traces stay zero.
     pad = 500
     inst_phase = np.zeros_like(vt, dtype=np.float32)
     inst_freq = np.zeros_like(vt, dtype=np.float32)
@@ -213,13 +263,17 @@ for idx in idx_range.keys():
         inst_phase[:, iy] = phase[pad:pad + nz].astype(np.float32)
         inst_freq[:, iy] = freq[pad:pad + nz].astype(np.float32)
 
+    # Instantaneous frequency: clip at the 99th percentile of |f| (per line) and scale to [-1, 1].
     freq_clip = np.percentile(np.abs(inst_freq[inst_freq != 0]), 99)
     inst_freq = np.clip(inst_freq, -freq_clip, freq_clip) / freq_clip
 
+    # Instantaneous phase: sin of the unwrapped phase (bounded, no 2*pi jumps).
     inst_phase = np.sin(inst_phase).astype(np.float32)
 
     info = np.concatenate((inst_phase[None], inst_freq[None]), axis=0)
 
+    # Overlap-add tiling (~50 % overlap) over depth and along the line; tile logits are
+    # blended with the raised-cosine ``weight`` window.
     nsz = int((nz - target_dim) / (target_dim // 2)) + 2 if nz > target_dim else 1
     nst = int((nt - target_dim) / (target_dim // 2)) + 2 if nt > target_dim else 1
     # Testing
@@ -263,6 +317,7 @@ for idx in idx_range.keys():
 
 
         # if idx in [133, 150]:
+        # Display: class map rescaled to [-1, 1] (foo * 2 / 5 - 1) stacked above the amplitude.
         hb = np.zeros((foo.shape[0], 4))
         imgs1 = np.concatenate((
             hb, (foo * 2 / 5 - 1), hb,

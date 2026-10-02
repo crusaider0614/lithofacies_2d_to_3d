@@ -1,3 +1,11 @@
+"""Train InfoUNet for lithofacies prediction on synthetic 2D lines cut from the 3D volume.
+
+Reads config/config_lithofacies.yaml (edit `main(...)` below to use another file), trains with
+DistributedDataParallel on CF.GPUS, and saves the full training state every CF.TRAIN.CHECK_EPOCH
+epochs to checkpoint/<CF.TAG>_<epoch:03d> (network, optimizer, lr_scheduler, train_loss and
+valid_loss histories). Set CF.DATASET.TDT to train the model for a given 2D trace spacing.
+Run from the repository root: python -m train.train_lithofacies
+"""
 import time
 import os
 
@@ -124,16 +132,21 @@ def _train(rank, world_size, CF):
     if is_parallel:
         network = DDP(network, device_ids=[rank], find_unused_parameters=True)
 
+    # Loss = class-weighted cross-entropy + 0.1 * Dice. Classes: 0 unlabeled (ignored),
+    # 1 weight 0 and excluded from Dice, 2 basement, 3 igneous (both up-weighted x2),
+    # 4 shale, 5 sand.
     class_weight = torch.tensor([0.0, 0.0, 2.0, 2.0, 1.0, 1.0], dtype=torch.float32)
     train_criterion = nn.CrossEntropyLoss(ignore_index=0, weight=class_weight, label_smoothing=0.1).to(rank)
     valid_criterion = nn.CrossEntropyLoss(ignore_index=0, weight=class_weight, label_smoothing=0.0).to(rank)
     dice_criterion = DiceLoss(ignore_index=0, ignore_classes=[1]).to(rank)
     lambda_dice = 0.1
     optimizer = optim.AdamW(network.parameters(), lr=CF.TRAIN.LR, betas=(CF.TRAIN.BETA1, CF.TRAIN.BETA2), weight_decay=0.01)
+    # Cosine decay over the full run down to LR / 100 (CF.TRAIN.LR_EXP is not used).
     lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=CF.TRAIN.END_EPOCH, eta_min=CF.TRAIN.LR / 100)
 
     train_losses = []
     valid_losses = []
+    # Resume from checkpoint/<PRETRAIN.TAG>_<LOAD_EPOCH>, including the loss histories.
     if CF.PRETRAIN.LOAD:
         load_tag = CF.PRETRAIN.TAG
         state = torch.load(os.path.join(get_project_root(), "checkpoint", load_tag + "_" + str(CF.PRETRAIN.LOAD_EPOCH).zfill(3)), map_location=lambda storage, loc: storage)

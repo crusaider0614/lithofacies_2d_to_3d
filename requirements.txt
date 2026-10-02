@@ -1,0 +1,14 @@
+# Install PyTorch first with the build matching your CUDA version:
+#   https://pytorch.org/get-started/locally/
+# Versions in comments are the ones the released checkpoints were verified to load with
+# (Python 3.11, torch 2.11.0+cu126).
+
+numpy         # 2.4.3
+scipy         # 1.17.1
+matplotlib    # 3.10.9
+PyYAML        # 6.0.3
+yacs          # 0.1.8
+segyio        # 1.9.14  (SEG-Y -> .npy conversion in module/seismic_data.py)
+obspy         # 1.5.0   (SEG-Y output in test/test_actual_line.py)
+Pillow        # 12.3.0  (figure scripts)
+scikit-learn  #         (confusion matrix / precision / recall / F1 in test/)

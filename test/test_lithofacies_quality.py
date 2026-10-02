@@ -1,3 +1,29 @@
+"""Qualitative check of a trained model on synthetic 2D lines, using tiled inference.
+
+Same idea as test_lithofacies.py, but each 768 x 512 test crop is predicted the way a
+full section is predicted at inference time: overlapping 256 x 256 tiles (the training
+crop size) blended with a raised-cosine weight window. Not used for a paper table; it is
+a visual check that the tiling produces seamless predictions.
+
+What it does:
+  1. Reads the loss history from the epoch-``epoch`` (default 50) checkpoint of ``tag``,
+     prints/plots it, and reloads the minimum-validation-loss checkpoint.
+  2. Draws random synthetic lines (trace spacing 25.0 m, hard-coded in the dataset call)
+     from the validation part of the 3D volume via ``LithofaciesDataset``.
+  3. Shows amplitude | ground truth | prediction | error mask for each line.
+
+Reads:  config/config_lithofacies.yaml, checkpoint/<tag>_050 and the best-epoch
+        checkpoint, data/<DATA_POOL>/ volume, facies, inst_phase and inst_freq .npy files.
+Writes: nothing; figures are shown on screen.
+
+Run from the repo root (running by file path fails because the repo root is then not on
+sys.path):
+
+    python -m test.test_lithofacies_quality
+
+There is no CLI. Edit the module-level settings (``target_dim``, ``epoch``, ``device``,
+``tag``); keep ``tag`` consistent with the ``tdt`` passed to the dataset.
+"""
 import os
 
 import matplotlib.pyplot as plt
@@ -13,10 +39,19 @@ from utils.project import get_project_root
 
 
 def add_weighted_avg(average, weight, new_sample, new_weight):
+    """Fold one tile prediction into a running weighted average.
+
+    ``average`` (C, H, W) is the current blended logits and ``weight`` (H, W) the weight
+    accumulated so far; ``new_sample``/``new_weight`` are the tile's logits and window.
+    Returns the updated average and accumulated weight.
+    """
     new_average = (weight[None] * average + new_weight[None] * new_sample) / (weight[None] + new_weight[None])
     return new_average, weight + new_weight
 
 
+# Tile size for inference (= training crop size). Each tile's logits are weighted by a 2D
+# raised-cosine (Hann-like) window that is ~1 at the tile centre and ~0 at its edges, so
+# overlapping tiles blend smoothly and tile-border artefacts are suppressed.
 target_dim = 256
 weight = np.array([(1 + np.cos((i - (target_dim // 2 - 0.5)) / (target_dim // 2) * np.pi)) / 2 for i in range(target_dim)])
 weight = weight[None] * weight[:, None]
@@ -31,6 +66,8 @@ device = torch.device("cuda:9")
 tag = "lithofacies_prediction_25.0_pat"
 print("Tag:", tag)
 
+# The last-epoch checkpoint stores the per-epoch loss history; reload the (1-based) epoch
+# with minimum validation loss.
 state = torch.load(os.path.join(get_project_root(), "checkpoint", tag + "_" + str(epoch).zfill(3)), map_location=lambda storage, loc: storage)
 train_losses = state["train_loss"]
 valid_losses = state["valid_loss"]
@@ -75,11 +112,13 @@ with torch.no_grad():
         nz = vt.shape[2]
         nt = vt.shape[3]
 
+        # Number of tiles along depth (z) and along the line (t): roughly 50 % overlap,
+        # with tile starts spread evenly so the first/last tiles touch the section edges.
         nsz = int((nz - target_dim) / (target_dim // 2)) + 2 if nz > target_dim else 1
         nst = int((nt - target_dim) / (target_dim // 2)) + 2 if nt > target_dim else 1
 
-        dp = np.zeros((nz, nt), dtype=np.float32)
-        fo = np.zeros((6, nz, nt), dtype=np.float32)
+        dp = np.zeros((nz, nt), dtype=np.float32)  # accumulated window weight
+        fo = np.zeros((6, nz, nt), dtype=np.float32)  # blended logits of the 6 classes
         # Testing
         for isz in range(nsz):
             sz = int(round((nz - target_dim) * isz / (nsz - 1))) if nsz > 1 else 0

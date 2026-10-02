@@ -1,3 +1,25 @@
+"""Per-class precision / recall / F1 and confusion matrix for all three trace-spacing models.
+
+For each model (TDT = 7.5, 12.5, 25.0 m, checkpoints lithofacies_prediction_<TDT>_pat_047 /
+_049 / _044, i.e. the minimum-validation-loss epochs), every inline and every crossline of
+the validation part of the 3D volume (CF.DATASET.VALID_IDX) is resampled from the 3D trace
+spacing VDT (12.5 m) to the model's TDT, predicted with overlapping 256 x 256 tiles, and
+compared with the facies labels. Metrics are pooled over all lines and reported for
+Basement, Igneous, Shale and Sand; classes 0 (unlabeled) and 1 are excluded.
+
+Reads:  config/config_lithofacies.yaml, the three checkpoints above under checkpoint/,
+        data/<DATA_POOL>/<VOLUME_TAG>.npy, <FACIES_TAG>.npy,
+        <VOLUME_TAG>_inst_phase.npy, <VOLUME_TAG>_inst_freq.npy.
+Writes: nothing; the tables are printed to stdout.
+
+Run from the repo root (running by file path fails because the repo root is then not on
+sys.path):
+
+    python -m test.test_lithofacies_quantity
+
+There is no CLI. Edit the module-level settings (``target_dim``, ``device``, and the
+(tdt, tag, epoch) list in the main loop).
+"""
 import os
 import numpy as np
 import torch
@@ -10,16 +32,26 @@ from utils.project import get_project_root
 
 
 def add_weighted_avg(average, weight, new_sample, new_weight):
+    """Fold one tile prediction (logits ``new_sample``, window ``new_weight``) into the
+    running weighted average ``average`` with accumulated weight ``weight``."""
     new_average = (weight[None] * average + new_weight[None] * new_sample) / (weight[None] + new_weight[None])
     return new_average, weight + new_weight
 
 
+# Tile size (= training crop size) and the 2D raised-cosine blending window used for
+# overlap-add tiling: ~1 at the tile centre, ~0 at its edges.
 target_dim = 256
 weight = np.array([(1 + np.cos((i - (target_dim // 2 - 0.5)) / (target_dim // 2) * np.pi)) / 2 for i in range(target_dim)])
 weight = weight[None] * weight[:, None]
 
 
 def get_line_data(volume, ix, direction, nt, mode="bilinear"):
+    """Extract inline/crossline ``ix`` of a (nz, nx, ny) array resampled to ``nt`` traces.
+
+    ``direction == "inline"`` takes the line at fixed x running over all y, otherwise the
+    line at fixed y over all x. ``mode`` is "bilinear" for continuous data and "nearest"
+    for facies labels. Returns an (nz, nt) array.
+    """
     nz, nx, ny = volume.shape
     if direction == "inline":
         scoordi = Coordinate(ix, 0)
@@ -42,6 +74,12 @@ def get_line_data(volume, ix, direction, nt, mode="bilinear"):
 
 
 def predict_section(network, vt, info, device):
+    """Predict facies for a full (nz, nt) section with overlapping target_dim tiles.
+
+    ``vt`` is the (nz, nt) amplitude section and ``info`` the (2, nz, nt) instantaneous
+    phase/frequency. Tiles overlap by about 50 %; their logits are blended with the
+    raised-cosine ``weight`` window before the argmax. Returns (nz, nt) int32 class labels.
+    """
     nz, nt = vt.shape
     nsz = int((nz - target_dim) / (target_dim // 2)) + 2 if nz > target_dim else 1
     nst = int((nt - target_dim) / (target_dim // 2)) + 2 if nt > target_dim else 1
@@ -107,6 +145,8 @@ for tdt, tag, epoch in [
 
     for direction in ["inline", "crossline"]:
         n_lines = nx if direction == "inline" else ny
+        # Resample the line from the 3D trace spacing (VDT) to this model's TDT while keeping
+        # its physical length, so the model sees the trace spacing it was trained on.
         nt = int(round((ny * vdt) / tdt)) if direction == "inline" else int(round((nx * vdt) / tdt))
 
         for ix in range(n_lines):
@@ -117,6 +157,7 @@ for tdt, tag, epoch in [
 
             print(ix, n_lines, vt.shape)
 
+            # Rescale the amplitude section to RMS 0.15 before inference.
             rms = (vt * vt).mean() ** 0.5
             if rms > 0:
                 vt = vt / rms * 0.15
@@ -124,6 +165,7 @@ for tdt, tag, epoch in [
             info = np.concatenate((ip[None], if_[None]), axis=0)
             fo = predict_section(network, vt, info, device)
 
+            # Score only labeled geological classes 2-5 (drop unlabeled 0 and above-first-label 1).
             mask = (ft != 0) & (ft != 1)
             all_pred.append(fo[mask])
             all_true.append(ft[mask])

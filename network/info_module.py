@@ -1,9 +1,15 @@
+"""Module for injecting the auxiliary "info" channels into a feature map."""
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 
 class InfoChannelAppend2d(nn.Module):
+    """Concatenate `info` to `x` along channels, resizing `info` bilinearly if the spatial sizes differ.
+
+    Takes a tuple (x, info) so it can sit at the head of an nn.Sequential.
+    """
+
     def __init__(self):
         super(InfoChannelAppend2d, self).__init__()
 

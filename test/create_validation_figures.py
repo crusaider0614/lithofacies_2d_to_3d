@@ -1,6 +1,36 @@
-"""
-Validation Figure Generator for Lithofacies Prediction Network
-Combines test logic from test_lithofacies_quality.py with paper figure style from create_paper_figures.py
+"""Validation figures: seismic / labeled lithofacies / prediction on synthetic 2D lines.
+
+For each (tdt, tag, epoch) in ``tdt_configs`` (by default only TDT = 25.0 m,
+checkpoint/lithofacies_prediction_25.0_pat_044, the minimum-validation-loss epoch), draws
+``n_samples`` random synthetic 2D lines from the validation part of the 3D volume
+(CF.DATASET.VALID_IDX), crops each to 768 samples x 512 traces at a random labeled depth,
+predicts it with overlapping 256 x 256 tiles, and saves a 3-panel paper-style figure:
+(a) seismic amplitude, (b) labeled lithofacies with an optional map inset showing the line
+location, (c) prediction. Predictions are blanked where the label is 0 (unlabeled).
+
+This module also provides the shared helpers imported by evaluate_accuracy.py,
+evaluate_depth_accuracy.py and create_annotated_figure.py: ``predict_section``,
+``extract_random_line``, ``facies_to_rgb`` (and ``add_weighted_avg``,
+``get_random_boundary_idx``). Importing it has no side effects other than matplotlib
+rcParams; ``main()`` only runs when executed as a script.
+
+Reads:  config/config_lithofacies.yaml, the checkpoint(s) in ``tdt_configs``,
+        data/<DATA_POOL>/<VOLUME_TAG>.npy, <FACIES_TAG>.npy,
+        <VOLUME_TAG>_inst_phase.npy, <VOLUME_TAG>_inst_freq.npy, and optionally
+        test/validation_figures/tdt_<TDT>/devided_volume.png (map image for the inset; the
+        inset is skipped if the file is missing; it is not produced by this repo).
+Writes: test/validation_figures/tdt_<TDT>/validation_sample_<NNN>.png and
+        test/validation_figures/tdt_<TDT>/line_coordinates.txt (start/end grid coordinates
+        of every sampled line).
+
+Run from the repo root (running by file path fails because the repo root is then not on
+sys.path):
+
+    python -m test.create_validation_figures
+
+There is no CLI. Edit the settings at the top of ``main()`` (``target_dim``, ``crop_size``,
+``n_samples``, ``device``, ``tdt_configs``). No random seed is set, so each run draws
+different lines.
 """
 import os
 import random
@@ -24,7 +54,12 @@ plt.rcParams['figure.dpi'] = 300
 
 
 def add_weighted_avg(average, weight, new_sample, new_weight):
-    """Weighted average for overlapping predictions"""
+    """Weighted average for overlapping predictions.
+
+    Folds one tile's logits ``new_sample`` (C, H, W) with window ``new_weight`` (H, W) into
+    the running average ``average`` whose accumulated weight is ``weight``. Returns the
+    updated (average, weight).
+    """
     new_average = (weight[None] * average + new_weight[None] * new_sample) / (weight[None] + new_weight[None])
     return new_average, weight + new_weight
 
@@ -65,12 +100,22 @@ def facies_to_rgb(facies_array):
 
 
 def predict_section(network, vt, info, device, target_dim=256):
-    """Predict lithofacies for a 2D section with sliding window"""
+    """Predict lithofacies for a 2D section with sliding window.
+
+    ``vt`` is a (1, 1, nz, nt) amplitude tensor and ``info`` a (1, 2, nz, nt) tensor of
+    instantaneous phase/frequency, both already on ``device``. The section is covered by
+    target_dim x target_dim tiles (the training crop size) overlapping by about 50 %; each
+    tile's 6-class logits are weighted by a 2D raised-cosine window (~1 at the centre, ~0 at
+    the edges) and averaged, which removes seams at tile borders. Returns the (nz, nt) int32
+    argmax class map. Assumes nz, nt >= target_dim.
+    """
     weight = np.array([(1 + np.cos((i - (target_dim // 2 - 0.5)) / (target_dim // 2) * np.pi)) / 2
                        for i in range(target_dim)])
     weight = weight[None] * weight[:, None]
 
     nz, nt = vt.shape[-2], vt.shape[-1]
+    # Tile counts along depth and along the line; tile starts are spread evenly so the
+    # first and last tiles align with the section edges.
     nsz = int((nz - target_dim) / (target_dim // 2)) + 2 if nz > target_dim else 1
     nst = int((nt - target_dim) / (target_dim // 2)) + 2 if nt > target_dim else 1
 
@@ -100,7 +145,13 @@ def predict_section(network, vt, info, device, target_dim=256):
 
 
 def get_random_boundary_idx(nx, ny, exclude_edge=None):
-    """Get random boundary coordinate"""
+    """Get random boundary coordinate.
+
+    Picks a random grid point on the boundary of an nx x ny grid. Edges are numbered
+    1 (y = 0), 2 (x = nx - 1), 3 (y = ny - 1), 4 (x = 0); the edge is chosen with
+    probability proportional to its length, and ``exclude_edge`` can be skipped so that
+    start and end points lie on different edges. Returns (Coordinate, edge_id).
+    """
     edges = {
         1: [(i, 0) for i in range(nx)],
         2: [(nx - 1, i) for i in range(ny)],
@@ -122,7 +173,21 @@ def get_random_boundary_idx(nx, ny, exclude_edge=None):
 
 
 def extract_random_line(volume_data, nt, vdt, tdt, scoordi=None, ecoordi=None, mode="bilinear"):
-    """Extract random seismic line from volume"""
+    """Extract random seismic line from volume.
+
+    Builds a synthetic 2D line of ``nt`` traces from the SeismicVolume ``volume_data``
+    (3D trace spacing ``vdt``) whose nominal trace spacing is ``tdt``. A straight line is
+    drawn between random points on two different edges of the survey; a segment of length
+    (0.9-1.1) x (nt - 1) x tdt is cut from it at a random offset and resampled to ``nt``
+    traces, so the actual trace spacing jitters by +/-10 % around ``tdt``.
+
+    If ``scoordi`` and ``ecoordi`` are given (e.g. the coordinates returned by a previous
+    call), exactly that segment is extracted; this is how facies and instantaneous
+    attributes are sampled along the same line as the amplitude. ``mode`` is "bilinear"
+    or "nearest" (use "nearest" for facies labels).
+
+    Returns (line_data of shape (nz, nt), start Coordinate, end Coordinate).
+    """
     target_distance = (nt - 1) * tdt
     crop_distance = (0.9 + 0.2 * random.random()) * target_distance
     nz, nx, ny = volume_data.shape
@@ -157,6 +222,12 @@ def create_validation_figure(seismic, ground_truth, prediction, output_path,
     (a) Seismic data
     (b) Labeled lithofacies (Ground truth) with volume location inset
     (c) Prediction with legend
+
+    ``seismic``, ``ground_truth`` and ``prediction`` are (nz, nt) arrays. The inset in (b)
+    is drawn only if ``scoordi``/``ecoordi`` are given and ``volume_img_path`` exists; the
+    line is drawn by scaling grid coordinates by the image size / (nx_volume, ny_volume).
+    The x axis is labeled in km using ``tdt``; the y axis assumes the panel spans 1-3 s TWT.
+    The figure is saved to ``output_path``.
     """
     img_height, img_width = seismic.shape
 
@@ -301,6 +372,7 @@ def create_validation_figure(seismic, ground_truth, prediction, output_path,
 
 
 def main():
+    """Generate validation figures for every entry in ``tdt_configs`` (see module docstring)."""
     # Configuration
     target_dim = 256
     crop_size = (768, 512)
@@ -414,7 +486,7 @@ def main():
                 if_, _, _ = extract_random_line(inst_freq_sv, nt, vdt, tdt, scoordi=scoordi, ecoordi=ecoordi, mode="bilinear")
                 if_ = if_[sz:ez]
 
-                # RMS normalization
+                # RMS normalization: rescale the amplitude crop to RMS 0.15 before inference
                 rms = (vt * vt).mean() ** 0.5
                 if rms > 0:
                     vt = vt / rms * 0.15

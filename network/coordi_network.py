@@ -1,3 +1,10 @@
+"""Lithofacies segmentation network (InfoUNet) and its Dice loss.
+
+InfoUNet maps a 2D seismic amplitude section (1 channel) plus auxiliary "info" channels
+(instantaneous phase and frequency, see compute_inst_attribute.py) to per-pixel logits over
+the 6 facies classes. Layout: residual U-Net encoder (4 stages), a Feature Pyramid
+Attention bottleneck, and decoder blocks that use horizontal (row-wise) self-attention.
+"""
 import os
 
 import torch
@@ -18,6 +25,12 @@ class GroupNorm(nn.Module):
 
 
 class FPA(nn.Module):
+    """Feature Pyramid Attention bottleneck.
+
+    A 2-level pyramid (stride-2 5x5 and 3x3 convs) gates a 1x1 projection of the input
+    multiplicatively, and a global-average-pooled branch is added on top.
+    """
+
     def __init__(self, in_channels, out_channels, is_norm=True):
         super(FPA, self).__init__()
 
@@ -76,6 +89,14 @@ class FPA(nn.Module):
 
 
 class NonLocalHorizontalBlock(nn.Module):
+    """Row-wise (horizontal) self-attention with a residual connection.
+
+    Each depth/time row attends over all traces of that same row, which links laterally
+    continuous reflectors. q/k/v come from (kernel_size x 1) convs, so they mix
+    `kernel_size` samples vertically but nothing horizontally. The output projection is
+    zero-initialized, so the block starts as the identity.
+    """
+
     def __init__(self, channels, kernel_size=3):
         super(NonLocalHorizontalBlock, self).__init__()
         self.in_channels = channels
@@ -86,7 +107,7 @@ class NonLocalHorizontalBlock(nn.Module):
         self.v = nn.Conv2d(channels, channels, (kernel_size, 1), 1, (kernel_size // 2, 0))
 
         self.proj_out = nn.Conv2d(channels, channels, 1, 1, 0)
-        self.proj_out._no_init = True
+        self.proj_out._no_init = True  # keep the zero init below when init_weights is applied
         nn.init.constant_(self.proj_out.weight, 0)
         nn.init.constant_(self.proj_out.bias, 0)
 
@@ -100,6 +121,7 @@ class NonLocalHorizontalBlock(nn.Module):
         b, c, nz, nx = q.shape
         ns = nx
 
+        # Fold depth rows into the batch: each of the b * nz rows is a sequence of nx traces.
         q = q.permute(0, 2, 1, 3).reshape(b * nz, c, ns)
         q = q.permute(0, 2, 1)
         k = k.permute(0, 2, 1, 3).reshape(b * nz, c, ns)
@@ -142,6 +164,11 @@ class DownSampleBlock(nn.Module):
 
 
 class InfoDecodeBlock(nn.Module):
+    """Decoder stage: upsample `u`, concatenate the encoder skip `x`, two 3x3 convs.
+
+    With is_attn, horizontal self-attention is applied to the skip input and to the output.
+    """
+
     def __init__(self, ui_channels, xi_channels, out_channels, is_norm=True, is_attn=True, attn_kernel=3):
         super(InfoDecodeBlock, self).__init__()
 
@@ -170,6 +197,12 @@ class InfoDecodeBlock(nn.Module):
 
 
 class InfoResBlock(nn.Module):
+    """Residual encoder block, optionally downsampling by `stride`.
+
+    If info_channels > 0, the info tensor (resized to this resolution) is concatenated to
+    the residual-branch input. Takes a tuple (x, info) and returns the features.
+    """
+
     def __init__(self, in_channels, info_channels, out_channels, stride=1, is_norm=True):
         super(InfoResBlock, self).__init__()
 
@@ -209,6 +242,14 @@ class InfoResBlock(nn.Module):
 
 
 class InfoUNet(nn.Module):
+    """U-Net facies classifier conditioned on auxiliary info channels.
+
+    forward(x, info): x (B, in_channels, H, W) amplitude, info (B, info_channels, H, W)
+    -> logits (B, out_channels, H, W). The info channels enter only at the input
+    (concatenated to x); deeper encoder blocks see image features alone. The output head
+    uses all four decoder scales, upsampled to full resolution and concatenated.
+    """
+
     def __init__(self, in_channels, info_channels, channels, out_channels, is_norm=True, is_attn=True):
         super(InfoUNet, self).__init__()
 
@@ -278,6 +319,12 @@ class InfoUNet(nn.Module):
 
 
 class DiceLoss(nn.Module):
+    """Soft multi-class Dice loss, 1 - mean Dice over the classes kept.
+
+    Pixels whose target is `ignore_index` are masked out; classes in `ignore_classes` (and
+    `ignore_index` itself) are excluded from the mean.
+    """
+
     def __init__(self, ignore_index=0, ignore_classes=None, smooth=1.0):
         super().__init__()
         self.ignore_index = ignore_index
@@ -307,6 +354,7 @@ class DiceLoss(nn.Module):
 
 
 def get_gen_model(cfg, additional_channel=0):
+    """Build InfoUNet from config MODEL.*; loads MODEL.PRETRAINED weights if that file exists."""
     model = InfoUNet(
         cfg.MODEL.A_CHANNELS + additional_channel,
         cfg.MODEL.INFO_CHANNELS,

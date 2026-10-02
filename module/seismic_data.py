@@ -1,3 +1,10 @@
+"""Geometry-aware containers for 2D seismic lines and 3D volumes, and SEG-Y -> .npy conversion.
+
+Data live under data/<data_pool>/ as <tag>.npy (samples along axis 0) plus a <tag>.nphead text
+sidecar holding the shape, the amplitude scale "amp", the sample interval "dz" and the
+coordinates of every trace. SeismicLine / SeismicVolume map between trace indices and map
+coordinates, so a volume can be sampled along an arbitrary straight line (get_line_coordi).
+"""
 import os
 import re
 import struct
@@ -10,11 +17,14 @@ from utils.project import get_project_root
 
 
 def add_weighted_avg(average, weight, new_sample, new_weight):
+    """Running weighted mean: fold new_sample (weight new_weight) into average (weight weight)."""
     new_average = (weight * average + new_weight * new_sample) / (weight + new_weight)
     return new_average
 
 
 class Coordinate:
+    """2D point/vector (cx, cy) with element-wise arithmetic against scalars or other Coordinates."""
+
     def __init__(self, cx, cy):
         self.cx = float(cx)
         self.cy = float(cy)
@@ -82,6 +92,8 @@ def distance(coordi1, coordi2):
 
 
 class Trace:
+    """A single 1D trace with its map coordinate."""
+
     def __init__(self, data, coordi):
         self.data = data
         self.nz = self.data.shape[0]
@@ -97,6 +109,11 @@ class Trace:
 
 
 def detect_stationary_ends(coordi):
+    """Slice bounds that drop traces at either end of a 2D line whose coordinates do not move.
+
+    coordi: (nt, 2) trace coordinates. A trace counts as moving when it is >= 0.5 coordinate
+    units from its neighbour. Returns (start, end) for data[:, start:end].
+    """
     nt = len(coordi)
 
     if nt == 1:
@@ -121,6 +138,12 @@ def detect_stationary_ends(coordi):
 # This subroutine must be modified according to the SEG-Y file format.
 # Shell script in the data directory need to be executed before this subroutine to extract .head, .suhead, .su, and .bin files
 def convert_line_segy_to_numpy(data_pool="southsea", tag=None, is_align_coordi=False, resample=1, sz=None, ez=None):
+    """Convert a 2D line, pre-split into .head/.suhead/.bin, to <tag>.npy + <tag>.nphead.
+
+    is_align_coordi replaces the trace coordinates by their least-squares straight-line fit;
+    sz/ez crop the sample axis; resample keeps every `resample`-th sample.
+    The saved array is raw (not divided by amp); amp is only recorded in the sidecar.
+    """
     data_root = os.path.join(get_project_root(), "data", data_pool)
     suhead_path = os.path.join(data_root, tag + ".suhead")
     header_path = os.path.join(data_root, tag + ".head")
@@ -209,6 +232,11 @@ def convert_line_segy_to_numpy(data_pool="southsea", tag=None, is_align_coordi=F
 
 
 def convert_2d_segy_to_numpy(data_pool="southsea", tag=None, is_align_coordi=False, rescale=1, sz=None, ez=None):
+    """Convert a 2D line read directly from <tag>.segy (or .sgy) with segyio to <tag>.npy + .nphead.
+
+    Trace coordinates come from SourceX/SourceY with the SEG-Y coordinate scalar applied;
+    amp is the maximum absolute amplitude. Other options as in convert_line_segy_to_numpy.
+    """
     data_root = os.path.join(get_project_root(), "data", data_pool)
 
     segy_path = os.path.join(data_root, tag + ".segy")
@@ -300,6 +328,12 @@ def convert_2d_segy_to_numpy(data_pool="southsea", tag=None, is_align_coordi=Fal
 # This class assumes a 2D seismic line is almost straight
 # To conform with curved lines, this class need to be modified
 class SeismicLine:
+    """2D section data (nz, nt) along a straight line from scoordi (trace 0) to ecoordi (trace nt-1).
+
+    tag=None gives an empty 1x1 line to be filled via clean_data/set_coordi. `dp` holds the
+    per-trace weight accumulated by insert_trace_* (weighted stacking of inserted traces).
+    """
+
     def __init__(self, data_pool="southsea", tag=None):
         if tag is None:
             self.amp = 1.0
@@ -324,6 +358,7 @@ class SeismicLine:
             self.dp = np.zeros(self.shape[1:], dtype=np.float32)
 
     def read_nphead(self, header_path):
+        """Parse a line .nphead; scoordi/ecoordi are a least-squares straight-line fit to the trace coordinates."""
         with open(header_path, encoding="latin-1") as f:
             shape_line = f.readline()
             nz = int(shape_line.split()[1])
@@ -387,6 +422,7 @@ class SeismicLine:
         return self.scoordi + (self.ecoordi - self.scoordi) * (it / (self.shape[1] - 1))
 
     def coordi_to_idx(self, coordi):
+        """Project coordi onto the line: returns (fractional trace index, closest point, signed distance)."""
         grad = self.ecoordi - self.scoordi
         a = -grad.cy
         b = grad.cx
@@ -404,6 +440,7 @@ class SeismicLine:
         return it, closest, distance
 
     def get_trace_idx(self, it):
+        """Trace at fractional index it (linear interpolation); zeros outside the line."""
         if it < 0 or it > self.shape[1] - 1:
             trace = np.zeros(self.shape[0], dtype=np.float32)
         else:
@@ -421,6 +458,7 @@ class SeismicLine:
         return self.get_trace_idx(it)
 
     def insert_trace_idx(self, new_trace, it):
+        """Stack new_trace at fractional index it, split linearly between the two neighbouring traces."""
         assert len(new_trace) == self.shape[0]
         if 0 <= it <= self.shape[1] - 1:
             if abs(round(it) - it) < 0.01:
@@ -442,6 +480,11 @@ class SeismicLine:
                 self.dp[int(np.ceil(it))] += portion
 
     def insert_trace_coordi(self, new_trace, coordi, max_distance=10.0):
+        """Stack new_trace at the projection of coordi if its distance to the line is < max_distance.
+
+        NOTE: the distance is signed and not wrapped in abs(), so points on the negative side
+        of the line are always accepted.
+        """
         it, _, distance = self.coordi_to_idx(coordi)
         if distance < max_distance:
             self.insert_trace_idx(new_trace, it)
@@ -452,6 +495,11 @@ class SeismicLine:
 # This subroutine must be modified according to the SEG-Y file format.
 # Shell script in the data directory need to be executed before this subroutine to extract .head, .suhead, .su, and .bin files
 def convert_volume_segy_to_numpy(data_pool="southsea", tag=None, is_align_coordi=False, rescale=1, sz=None, ez=None):
+    """Convert a 3D volume, pre-split into .head/.suhead/.bin, to <tag>.npy (nz, nx, ny) + .nphead.
+
+    is_align_coordi replaces the trace coordinates by a least-squares bilinear fit of the four
+    corners. Saved raw, as in convert_line_segy_to_numpy.
+    """
     data_root = os.path.join(get_project_root(), "data", data_pool)
     suhead_path = os.path.join(data_root, tag + ".suhead")
     header_path = os.path.join(data_root, tag + ".head")
@@ -563,6 +611,13 @@ def convert_volume_segy_to_numpy(data_pool="southsea", tag=None, is_align_coordi
 
 # This class assumes a 3D seismic volume is distributed as a quadrangle shape
 class SeismicVolume:
+    """3D volume data (nz, nx, ny) over a quadrangle given by its four corner coordinates.
+
+    corner_coordi[i][j] is the corner at (ix = i * (nx-1), iy = j * (ny-1)); positions inside
+    are bilinear in the grid indices. tag=None gives an empty container; the training code
+    fills .data directly with a memory-mapped array.
+    """
+
     def __init__(self, data_pool="southsea", tag=None):
         if tag is None:
             self.amp = 1.0
@@ -589,6 +644,7 @@ class SeismicVolume:
             self.dp = np.ones(self.shape[1:], dtype=np.float32)
 
     def read_nphead(self, header_path):
+        """Parse a volume .nphead; corner_coordi is a least-squares bilinear fit to the trace coordinates."""
         with open(header_path, encoding="latin-1") as f:
             shape_line = f.readline()
             nz = int(shape_line.split()[1])
@@ -672,6 +728,10 @@ class SeismicVolume:
         return out_coordi
 
     def coordi_to_idx(self, coordi):
+        """Fractional grid indices (ix, iy) of coordi, inverting the bilinear corner mapping.
+
+        Each axis is a quadratic in the unknown fraction; the root closest to 0.5 is taken.
+        """
         coeff_1x = self.corner_coordi[1][1] - self.corner_coordi[1][0] - self.corner_coordi[0][1] + self.corner_coordi[0][0]
         coeff_1c = self.corner_coordi[0][1] - self.corner_coordi[0][0]
         coeff_2x = self.corner_coordi[1][0] - self.corner_coordi[0][0]
@@ -722,6 +782,7 @@ class SeismicVolume:
         return ix, iy
 
     def get_trace_idx(self, ix, iy):
+        """Trace at fractional grid indices (bilinear interpolation); zeros outside the volume."""
         if ix < 0 or ix > self.shape[1] - 1 or iy < 0 or iy > self.shape[2] - 1:
             trace = np.zeros(self.shape[0], dtype=np.float32)
         else:
@@ -762,6 +823,7 @@ class SeismicVolume:
         return self.get_trace_idx(ix, iy)
 
     def insert_trace_idx(self, new_trace, ix, iy):
+        """Stack new_trace at fractional (ix, iy), split bilinearly between the four neighbouring traces."""
         assert len(new_trace) == self.shape[0]
         if 0 <= ix <= self.shape[1] - 1 and 0 <= iy <= self.shape[2] - 1:
             if abs(round(ix) - ix) < 0.01:
@@ -824,6 +886,7 @@ class SeismicVolume:
         self.insert_trace_idx(new_trace, ix, iy)
 
     def get_line(self, line, mode="bilinear"):
+        """Fill a SeismicLine by sampling this volume at each of its trace coordinates."""
         for it in range(line.shape[1]):
             coordi = line.idx_to_coordi(it)
             trace = self.get_trace_coordi(coordi, mode=mode)
@@ -831,6 +894,10 @@ class SeismicVolume:
         return line
 
     def get_line_coordi(self, scoordi, ecoordi, nt, mode="bilinear"):
+        """Sample nt equally spaced traces along the straight line scoordi -> ecoordi (grid-index coordinates).
+
+        mode="nearest" snaps to the nearest trace, used for categorical facies volumes.
+        """
         line = SeismicLine(tag=None)
         line.clean_data(shape=(self.shape[0], nt))
         line.set_coordi(scoordi, ecoordi)

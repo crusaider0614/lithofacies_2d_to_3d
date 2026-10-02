@@ -1,3 +1,29 @@
+"""Overall accuracy, per-class precision/recall/F1 and confusion matrix on synthetic 2D lines.
+
+Evaluates the TDT = 25.0 m model (checkpoint/lithofacies_prediction_25.0_pat_044, the
+minimum-validation-loss epoch) on ``n_samples`` random synthetic 2D lines. Each line is
+extracted from the validation part of the 3D volume (CF.DATASET.VALID_IDX) along a random
+straight line between two boundary points (``extract_random_line``), resampled to 25 m
+trace spacing, and cropped to ``crop_size`` = 768 samples x 512 traces at a random depth
+that contains labels. The crop is predicted with overlapping 256 x 256 tiles
+(``predict_section``) and metrics are pooled over all labeled pixels (ground truth != 0).
+Printed: overall accuracy, per-class GT/prediction counts with precision/recall/F1,
+raw and row-normalized confusion matrices, weighted and macro F1.
+
+Reads:  config/config_lithofacies.yaml, checkpoint/lithofacies_prediction_25.0_pat_044,
+        data/<DATA_POOL>/<VOLUME_TAG>.npy, <FACIES_TAG>.npy,
+        <VOLUME_TAG>_inst_phase.npy, <VOLUME_TAG>_inst_freq.npy.
+Writes: nothing; results are printed to stdout.
+
+Run from the repo root (running by file path fails because the repo root is then not on
+sys.path):
+
+    python -m test.evaluate_accuracy
+
+There is no CLI. Edit the module-level settings (``target_dim``, ``crop_size``, ``device``,
+``n_samples``, ``tdt`` and the checkpoint path). Random seeds are fixed (42) so the same
+lines are drawn on every run.
+"""
 import os, random
 import numpy as np
 import torch
@@ -39,6 +65,8 @@ inst_freq = np.load(os.path.join(get_project_root(), 'data', data_pool, volume_t
 nz, nx, ny = volume.shape
 print('Volume shape:', volume.shape)
 
+# Wrap each array in a SeismicVolume (corner coordinates = grid indices) so that
+# extract_random_line can sample arbitrary straight lines through it.
 volume_sv = SeismicVolume()
 volume_sv.clean_data(shape=(nz, nx, ny))
 volume_sv.set_coordi(Coordinate(0, 0), Coordinate(0, ny - 1), Coordinate(nx - 1, 0), Coordinate(nx - 1, ny - 1))
@@ -79,6 +107,9 @@ with torch.no_grad():
         if (idx + 1) % 20 == 0:
             print('  Processing', idx + 1, '/', n_samples, '...')
         
+        # Draw a random line and a random 768-sample depth window; retry until the window
+        # contains at least one labeled pixel. Facies use nearest-neighbour sampling, and the
+        # same start/end coordinates are reused for facies and the inst. attributes.
         while True:
             vt, scoordi, ecoordi = extract_random_line(volume_sv, nt, vdt, tdt, mode='bilinear')
             ft, _, _ = extract_random_line(facies_sv, nt, vdt, tdt, scoordi=scoordi, ecoordi=ecoordi, mode='nearest')
@@ -96,16 +127,21 @@ with torch.no_grad():
         if_, _, _ = extract_random_line(inst_freq_sv, nt, vdt, tdt, scoordi=scoordi, ecoordi=ecoordi, mode='bilinear')
         if_ = if_[sz:ez]
         
+        # Rescale the amplitude crop to RMS 0.15 before inference.
         rms = (vt * vt).mean() ** 0.5
         if rms > 0:
             vt = vt / rms * 0.15
-        
+
         vt_tensor = torch.tensor(vt[None, None], dtype=torch.float32, device=device)
+        # 2-channel info input: instantaneous phase, instantaneous frequency.
         info_tensor = torch.tensor(np.stack([ip, if_])[None], dtype=torch.float32, device=device)
-        
+
         fo = predict_section(network, vt_tensor, info_tensor, device, target_dim)
+        # Blank predictions where there is no ground-truth label (class 0).
         fo[ft == 0] = 0
-        
+
+        # Score every labeled pixel; note that class 1 is included here, unlike
+        # test_lithofacies_quantity.py which keeps classes 2-5 only.
         mask = ft != 0
         all_gt.extend(ft[mask].flatten())
         all_pred.extend(fo[mask].flatten())
@@ -130,6 +166,7 @@ print('=' * 60)
 classes_present = sorted(set(all_gt) | set(all_pred))
 classes_present = [c for c in classes_present if c != 0]
 
+# One-vs-rest precision / recall / F1 per class.
 for cls in classes_present:
     gt_cls = all_gt == cls
     pred_cls = all_pred == cls
