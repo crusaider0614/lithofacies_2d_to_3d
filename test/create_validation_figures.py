@@ -377,7 +377,7 @@ def main():
     target_dim = 256
     crop_size = (768, 512)
     n_samples = 30
-    device = torch.device("cuda:9")
+    device = torch.device("cuda:0")
 
     config_file = os.path.join(get_project_root(), "config", "config_lithofacies.yaml")
     with open(config_file, "rt") as f_read:
@@ -444,7 +444,7 @@ def main():
         # Load network
         network = get_gen_model(CF, additional_channel=0).to(device)
         checkpoint_path = os.path.join(get_project_root(), "checkpoint", f"{tag}_{str(epoch).zfill(3)}")
-        state = torch.load(checkpoint_path, map_location=lambda storage, loc: storage)
+        state = torch.load(checkpoint_path, map_location=lambda storage, loc: storage, weights_only=True)
         network.load_state_dict(state["network"])
         network = network.eval()
         print(f"Loaded checkpoint: {checkpoint_path}")

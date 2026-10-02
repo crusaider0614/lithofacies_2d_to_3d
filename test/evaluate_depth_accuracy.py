@@ -42,7 +42,7 @@ np.random.seed(42)
 
 target_dim = 256
 crop_size = (768, 512)
-device = torch.device('cuda:9')
+device = torch.device('cuda:0')
 n_samples = 100
 
 config_file = os.path.join(get_project_root(), 'config', 'config_lithofacies.yaml')
@@ -86,7 +86,7 @@ inst_freq_sv.data = inst_freq
 
 network = get_gen_model(CF, additional_channel=0).to(device)
 checkpoint_path = os.path.join(get_project_root(), 'checkpoint', 'lithofacies_prediction_25.0_pat_044')
-state = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+state = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
 network.load_state_dict(state['network'])
 network.eval()
 print('Loaded checkpoint')
@@ -142,10 +142,10 @@ with torch.no_grad():
         # Blank predictions where there is no ground-truth label (class 0).
         fo[ft == 0] = 0
 
-        # Per-depth accuracy (overall); rows are depth indices within the crop, and every
-        # labeled pixel (ft != 0, so class 1 included) counts toward the overall curve.
+        # Per-depth accuracy (overall); rows are depth indices within the crop. Only the
+        # geological classes 2-5 are scored (0 unlabeled and 1 unclassified are dropped).
         for d in range(crop_size[0]):
-            mask = ft[d, :] != 0
+            mask = ft[d, :] >= 2
             if mask.sum() > 0:
                 depth_correct[d] += np.sum(ft[d, mask] == fo[d, mask])
                 depth_total[d] += mask.sum()

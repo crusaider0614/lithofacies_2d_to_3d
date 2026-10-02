@@ -350,7 +350,7 @@ class SeismicLine:
             self.data = np.load(data_path)
             # Scale raw SEG-Y-derived data by the "amp" value from the .nphead
             # sidecar (written by convert_line_segy_to_numpy). The training
-            # volumes used by LithofaciesDataset are already RMS-normalized
+            # volumes used by LithofaciesDataset are already RMS-normalized (0.15)
             # and bypass this division on purpose.
             self.data = self.data / self.amp
             if self.shape != self.data.shape:
@@ -480,13 +480,10 @@ class SeismicLine:
                 self.dp[int(np.ceil(it))] += portion
 
     def insert_trace_coordi(self, new_trace, coordi, max_distance=10.0):
-        """Stack new_trace at the projection of coordi if its distance to the line is < max_distance.
-
-        NOTE: the distance is signed and not wrapped in abs(), so points on the negative side
-        of the line are always accepted.
-        """
+        """Stack new_trace at the projection of coordi if its distance to the line is < max_distance."""
         it, _, distance = self.coordi_to_idx(coordi)
-        if distance < max_distance:
+        # coordi_to_idx returns a signed distance (negative on one side of the line).
+        if abs(distance) < max_distance:
             self.insert_trace_idx(new_trace, it)
         else:
             print("Too far distance: ", distance)
@@ -636,7 +633,7 @@ class SeismicVolume:
             self.data = np.load(data_path)
             # Scale raw SEG-Y-derived data by the "amp" value from the .nphead
             # sidecar (written by convert_volume_segy_to_numpy). The training
-            # volumes used by LithofaciesDataset are already RMS-normalized
+            # volumes used by LithofaciesDataset are already RMS-normalized (0.15)
             # and bypass this division on purpose.
             self.data = self.data / self.amp
             if self.shape != self.data.shape:

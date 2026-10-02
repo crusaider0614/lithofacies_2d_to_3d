@@ -5,7 +5,7 @@ _049 / _044, i.e. the minimum-validation-loss epochs), every inline and every cr
 the validation part of the 3D volume (CF.DATASET.VALID_IDX) is resampled from the 3D trace
 spacing VDT (12.5 m) to the model's TDT, predicted with overlapping 256 x 256 tiles, and
 compared with the facies labels. Metrics are pooled over all lines and reported for
-Basement, Igneous, Shale and Sand; classes 0 (unlabeled) and 1 are excluded.
+Basement, Igneous, Shale and Sand; classes 0 (unlabeled) and 1 (unclassified) are excluded.
 
 Reads:  config/config_lithofacies.yaml, the three checkpoints above under checkpoint/,
         data/<DATA_POOL>/<VOLUME_TAG>.npy, <FACIES_TAG>.npy,
@@ -112,7 +112,7 @@ def predict_section(network, vt, info, device):
 config_file = os.path.join(get_project_root(), "config", "config_lithofacies.yaml")
 with open(config_file, "rt") as f_read:
     CF = yacs.config.load_cfg(f_read)
-device = torch.device("cuda:9")
+device = torch.device("cuda:0")
 
 data_pool = CF.DATASET.DATA_POOL
 volume_tag = CF.DATASET.VOLUME_TAG
@@ -136,7 +136,7 @@ for tdt, tag, epoch in [
     print(f"=== tdt = {tdt} m ===")
 
     network = get_gen_model(CF, additional_channel=0).to(device)
-    state = torch.load(os.path.join(get_project_root(), "checkpoint", tag + "_" + str(epoch).zfill(3)), map_location=lambda storage, loc: storage)
+    state = torch.load(os.path.join(get_project_root(), "checkpoint", tag + "_" + str(epoch).zfill(3)), map_location=lambda storage, loc: storage, weights_only=True)
     network.load_state_dict(state["network"])
     network = network.eval()
 
@@ -165,7 +165,7 @@ for tdt, tag, epoch in [
             info = np.concatenate((ip[None], if_[None]), axis=0)
             fo = predict_section(network, vt, info, device)
 
-            # Score only labeled geological classes 2-5 (drop unlabeled 0 and above-first-label 1).
+            # Score only labeled geological classes 2-5 (drop 0 unlabeled and 1 unclassified).
             mask = (ft != 0) & (ft != 1)
             all_pred.append(fo[mask])
             all_true.append(ft[mask])

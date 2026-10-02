@@ -1,8 +1,7 @@
 TAG: "lithofacies_prediction_25.0_pat"
 CUDNN_BENCHMARK: True
-SEED: 654326212
 DEVICE: "cuda"
-GPUS: [ 6, 7, 8, 9 ]
+GPUS: [ 0 ]  # the paper models were trained on 4 GPUs; batch sizes below are global (split across GPUs)
 
 PRETRAIN:
   LOAD: False
@@ -42,12 +41,5 @@ TRAIN:
   END_EPOCH: 50
   CHECK_EPOCH: 1
   LR: 0.00001
-  LR_EXP: 0.999
   BETA1: 0.9
   BETA2: 0.999
-
-EVAL:
-  BATCH_SIZE_FID: 28
-  BEGIN_EPOCH: 300
-  END_EPOCH: 500
-  STEP_EPOCH: 10

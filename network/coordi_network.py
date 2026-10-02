@@ -1,7 +1,7 @@
 """Lithofacies segmentation network (InfoUNet) and its Dice loss.
 
 InfoUNet maps a 2D seismic amplitude section (1 channel) plus auxiliary "info" channels
-(instantaneous phase and frequency, see compute_inst_attribute.py) to per-pixel logits over
+(instantaneous phase and frequency, see process/compute_inst_attribute.py) to per-pixel logits over
 the 6 facies classes. Layout: residual U-Net encoder (4 stages), a Feature Pyramid
 Attention bottleneck, and decoder blocks that use horizontal (row-wise) self-attention.
 """
@@ -366,7 +366,7 @@ def get_gen_model(cfg, additional_channel=0):
 
     # load the pre-trained model
     if "PRETRAINED" in cfg.MODEL.keys() and os.path.exists(cfg.MODEL.PRETRAINED) and os.path.isfile(cfg.MODEL.PRETRAINED):
-        trained_model = torch.load(cfg.MODEL.PRETRAINED, map_location=lambda storage, loc: storage)
+        trained_model = torch.load(cfg.MODEL.PRETRAINED, map_location=lambda storage, loc: storage, weights_only=True)
         trained_model = {k.replace("module.", ""): v for (k, v) in trained_model.items()}
         model.load_state_dict(trained_model, strict=True)
     return model

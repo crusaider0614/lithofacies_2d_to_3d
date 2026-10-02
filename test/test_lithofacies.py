@@ -47,7 +47,7 @@ epoch = 50
 config_file = os.path.join(get_project_root(), "config", "config_lithofacies.yaml")
 with open(config_file, "rt") as f_read:
     CF = yacs.config.load_cfg(f_read)
-device = torch.device("cuda:5")
+device = torch.device("cuda:0")
 tag = CF.TAG
 # tag = "lithofacies_prediction_7.5_pat"
 # tag = "lithofacies_prediction_12.5_pat"
@@ -57,7 +57,7 @@ print("Tag:", tag)
 
 # The last-epoch checkpoint stores the per-epoch loss history; argmin(valid_loss) + 1 is the
 # (1-based) epoch with minimum validation loss, which is the checkpoint actually evaluated.
-state = torch.load(os.path.join(get_project_root(), "checkpoint", tag + "_" + str(epoch).zfill(3)), map_location=lambda storage, loc: storage)
+state = torch.load(os.path.join(get_project_root(), "checkpoint", tag + "_" + str(epoch).zfill(3)), map_location=lambda storage, loc: storage, weights_only=True)
 train_losses = state["train_loss"]
 valid_losses = state["valid_loss"]
 print(np.argmin(valid_losses) + 1, min(valid_losses))
@@ -65,7 +65,7 @@ plt.plot(train_losses)
 plt.plot(valid_losses)
 plt.show()
 
-state = torch.load(os.path.join(get_project_root(), "checkpoint", tag + "_" + str(np.argmin(valid_losses) + 1).zfill(3)), map_location=lambda storage, loc: storage)
+state = torch.load(os.path.join(get_project_root(), "checkpoint", tag + "_" + str(np.argmin(valid_losses) + 1).zfill(3)), map_location=lambda storage, loc: storage, weights_only=True)
 
 # Load
 network = get_gen_model(CF, additional_channel=0).to(device)

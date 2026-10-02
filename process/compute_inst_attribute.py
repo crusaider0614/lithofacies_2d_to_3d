@@ -1,9 +1,11 @@
 """Precompute the instantaneous-attribute volumes used as the network's "info" input.
 
-Reads data/southsea/<volume_tag>.npy (shape nz, nx, ny; already RMS-normalized) and writes
+Reads data/southsea/<volume_tag>.npy (shape nz, nx, ny; already RMS-normalized to 0.15) and writes
   <volume_tag>_inst_phase.npy  sin of the unwrapped instantaneous phase, in [-1, 1]
   <volume_tag>_inst_freq.npy   instantaneous frequency, clipped at its 99th percentile and scaled to [-1, 1]
-next to it. Run once before training: python compute_inst_attribute.py
+next to it. Run once before training, from the repository root:
+
+    python -m process.compute_inst_attribute
 """
 import os
 import numpy as np

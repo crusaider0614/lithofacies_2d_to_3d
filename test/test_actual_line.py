@@ -9,7 +9,7 @@ line listed in ``idx_range``:
      training trace spacing TDT (7.5 / 12.5 / 25.0 m) is nearest to it;
   3. rescale the section to RMS 0.15 and compute the 2-channel info input from it
      (sin of the unwrapped Hilbert phase, and instantaneous frequency clipped at its 99th
-     percentile and scaled to [-1, 1]), as compute_inst_attribute.py does for the 3D volume;
+     percentile and scaled to [-1, 1]), as process/compute_inst_attribute.py does for the 3D volume;
   4. predict with overlapping 256 x 256 tiles blended by a raised-cosine window, and
      display prediction above amplitude.
 Writing the prediction to SEG-Y (data/ssealine_matched/lithofacies/new_<idx>.segy) is
@@ -78,27 +78,27 @@ config_file = os.path.join(get_project_root(), "config", "config_lithofacies.yam
 with open(config_file, "rt") as f_read:
     CF = yacs.config.load_cfg(f_read)
 # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-device = torch.device("cuda:5")
+device = torch.device("cuda:0")
 
 # Load one model per training trace spacing (epochs = minimum validation loss).
 tag = "lithofacies_prediction_7.5_pat"
 epoch = 47
 network_1 = get_gen_model(CF, additional_channel=0).to(device)
-state = torch.load(os.path.join(get_project_root(), "checkpoint", tag + "_" + str(epoch).zfill(3)), map_location=lambda storage, loc: storage)
+state = torch.load(os.path.join(get_project_root(), "checkpoint", tag + "_" + str(epoch).zfill(3)), map_location=lambda storage, loc: storage, weights_only=True)
 network_1.load_state_dict(state["network"])
 network_1 = network_1.eval()
 
 tag = "lithofacies_prediction_12.5_pat"
 epoch = 49
 network_2 = get_gen_model(CF, additional_channel=0).to(device)
-state = torch.load(os.path.join(get_project_root(), "checkpoint", tag + "_" + str(epoch).zfill(3)), map_location=lambda storage, loc: storage)
+state = torch.load(os.path.join(get_project_root(), "checkpoint", tag + "_" + str(epoch).zfill(3)), map_location=lambda storage, loc: storage, weights_only=True)
 network_2.load_state_dict(state["network"])
 network_2 = network_2.eval()
 
 tag = "lithofacies_prediction_25.0_pat"
 epoch = 44
 network_3 = get_gen_model(CF, additional_channel=0).to(device)
-state = torch.load(os.path.join(get_project_root(), "checkpoint", tag + "_" + str(epoch).zfill(3)), map_location=lambda storage, loc: storage)
+state = torch.load(os.path.join(get_project_root(), "checkpoint", tag + "_" + str(epoch).zfill(3)), map_location=lambda storage, loc: storage, weights_only=True)
 network_3.load_state_dict(state["network"])
 network_3 = network_3.eval()
 
@@ -279,12 +279,12 @@ for idx in idx_range.keys():
     # Testing
     with torch.no_grad():
         for isz in range(nsz):
-            sz = int(round((nz - target_dim) * isz / (nsz - 1)))
+            sz = int(round((nz - target_dim) * isz / (nsz - 1))) if nsz > 1 else 0
         # for isz in range(2):
         #     sz = 0 if isz == 0 else 256
             ez = sz + target_dim
             for ist in range(nst):
-                st = int(round((nt - target_dim) * ist / (nst - 1)))
+                st = int(round((nt - target_dim) * ist / (nst - 1))) if nst > 1 else 0
                 et = st + target_dim
                 # print(sz, ez, st, et)
 

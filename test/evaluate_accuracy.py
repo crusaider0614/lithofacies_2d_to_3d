@@ -6,7 +6,9 @@ extracted from the validation part of the 3D volume (CF.DATASET.VALID_IDX) along
 straight line between two boundary points (``extract_random_line``), resampled to 25 m
 trace spacing, and cropped to ``crop_size`` = 768 samples x 512 traces at a random depth
 that contains labels. The crop is predicted with overlapping 256 x 256 tiles
-(``predict_section``) and metrics are pooled over all labeled pixels (ground truth != 0).
+(``predict_section``) and metrics are pooled over all pixels whose ground truth is one of the
+geological classes 2-5 (0 unlabeled and 1 unclassified are excluded, as in
+test_lithofacies_quantity.py).
 Printed: overall accuracy, per-class GT/prediction counts with precision/recall/F1,
 raw and row-normalized confusion matrices, weighted and macro F1.
 
@@ -42,7 +44,7 @@ np.random.seed(42)
 
 target_dim = 256
 crop_size = (768, 512)
-device = torch.device('cuda:9')
+device = torch.device('cuda:0')
 n_samples = 100
 
 config_file = os.path.join(get_project_root(), 'config', 'config_lithofacies.yaml')
@@ -89,12 +91,12 @@ inst_freq_sv.data = inst_freq
 
 network = get_gen_model(CF, additional_channel=0).to(device)
 checkpoint_path = os.path.join(get_project_root(), 'checkpoint', 'lithofacies_prediction_25.0_pat_044')
-state = torch.load(checkpoint_path, map_location='cpu')
+state = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
 network.load_state_dict(state['network'])
 network.eval()
 print('Loaded checkpoint')
 
-CLASS_NAMES = {0: 'Unclassified', 2: 'Basement', 3: 'Igneous', 4: 'Shale', 5: 'Sand'}
+CLASS_NAMES = {2: 'Basement', 3: 'Igneous', 4: 'Shale', 5: 'Sand'}
 
 nt = crop_size[1]
 all_gt = []
@@ -140,9 +142,8 @@ with torch.no_grad():
         # Blank predictions where there is no ground-truth label (class 0).
         fo[ft == 0] = 0
 
-        # Score every labeled pixel; note that class 1 is included here, unlike
-        # test_lithofacies_quantity.py which keeps classes 2-5 only.
-        mask = ft != 0
+        # Score only the geological classes 2-5 (drop 0 unlabeled and 1 unclassified).
+        mask = ft >= 2
         all_gt.extend(ft[mask].flatten())
         all_pred.extend(fo[mask].flatten())
 
@@ -164,7 +165,8 @@ print('PER-CLASS METRICS')
 print('=' * 60)
 
 classes_present = sorted(set(all_gt) | set(all_pred))
-classes_present = [c for c in classes_present if c != 0]
+# A class-1 prediction on a scored pixel counts as an error but has no column of its own.
+classes_present = [c for c in classes_present if c >= 2]
 
 # One-vs-rest precision / recall / F1 per class.
 for cls in classes_present:

@@ -122,11 +122,11 @@ class LithofaciesDataset(Dataset):
             self.facies_data = None
         nz, nx, ny = self.volume_data.shape
 
-        # The training volumes are already RMS-normalized offline, so
+        # The training volumes are already RMS-normalized to 0.15 offline, so
         # self.volume_data is used as-is here. This intentionally skips the
         # "amp" division that SeismicVolume's own tag-based constructor
         # applies (see module/seismic_data.py), which is meant for raw volumes
-        # converted from SEG-Y. Real 2D lines are RMS-normalized at test time
+        # converted from SEG-Y. Real 2D lines are rescaled to the same RMS of 0.15 at test time
         # instead (see test/test_actual_line.py).
         self.volume_class = SeismicVolume()
         self.volume_class.clean_data(shape=(nz, nx, ny))

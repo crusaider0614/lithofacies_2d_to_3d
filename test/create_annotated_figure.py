@@ -234,7 +234,7 @@ np.random.seed(123)
 
 target_dim = 256
 crop_size = (768, 512)
-device = torch.device('cuda:9')
+device = torch.device('cuda:0')
 
 config_file = os.path.join(get_project_root(), 'config', 'config_lithofacies.yaml')
 with open(config_file, 'rt') as f:
@@ -278,7 +278,7 @@ inst_freq_sv.data = inst_freq
 
 network = get_gen_model(CF, additional_channel=0).to(device)
 checkpoint_path = os.path.join(get_project_root(), 'checkpoint', 'lithofacies_prediction_25.0_pat_044')
-state = torch.load(checkpoint_path, map_location='cpu')
+state = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
 network.load_state_dict(state['network'])
 network.eval()
 print('Loaded checkpoint')

@@ -22,7 +22,8 @@ network/
   coordi_network.py             InfoUNet and DiceLoss
   info_module.py                Concatenation of the auxiliary info channels
 utils/                          Paths, DDP helpers, weight init, I/O and plotting helpers
-compute_inst_attribute.py       Precompute the instantaneous phase / frequency volumes
+process/
+  compute_inst_attribute.py     Precompute the instantaneous phase / frequency volumes
 train/
   train_lithofacies.py          Training (DistributedDataParallel)
 test/
@@ -59,10 +60,10 @@ Place them as follows:
 
 ```
 data/southsea/
-  3dn_tbcut.npy                 3D seismic volume (nz, nx, ny), RMS-normalized
+  3dn_tbcut.npy                 3D seismic volume (nz, nx, ny), RMS-normalized to 0.15
   3dn_facies_unc.npy            3D facies labels, same shape
-  3dn_tbcut_inst_phase.npy      created by compute_inst_attribute.py
-  3dn_tbcut_inst_freq.npy       created by compute_inst_attribute.py
+  3dn_tbcut_inst_phase.npy      created by process/compute_inst_attribute.py
+  3dn_tbcut_inst_freq.npy       created by process/compute_inst_attribute.py
 data/ssealine_matched/
   <n>.npy, <n>.nphead           real 2D lines for test/test_actual_line.py
 checkpoint/
@@ -79,8 +80,12 @@ checkpoint/
 
 Each epoch is the one with the lowest validation loss over 50 epochs of training.
 
-Facies classes: 0 unlabeled (ignored), 2 basement, 3 igneous, 4 shale, 5 sand. Class 1 has weight 0
-in the loss and is excluded from the reported metrics.
+Facies classes: 0 unlabeled, 1 unclassified (outside the interpreted interval), 2 basement,
+3 igneous, 4 shale, 5 sand. Classes 0 and 1 are excluded from the loss and from all reported
+metrics.
+
+Real 2D lines are rescaled to an RMS amplitude of 0.15 before inference, matching the training
+volume.
 
 ## Usage
 
@@ -91,10 +96,11 @@ epoch, ...) instead.
 
 1. Precompute the instantaneous attributes (once):
    ```bash
-   python compute_inst_attribute.py
+   python -m process.compute_inst_attribute
    ```
 2. Train. Set `DATASET.TDT` and `TAG` in `config/config_lithofacies.yaml` for each trace spacing,
-   and `GPUS` for your machine:
+   and `GPUS` for your machine (the released models were trained on 4 GPUs; the batch size in the
+   config is the total over all GPUs):
    ```bash
    python -m train.train_lithofacies
    ```
@@ -114,3 +120,7 @@ epoch, ...) instead.
 ## Citation
 
 > **TODO: add the paper citation.**
+
+## License
+
+BSD 3-Clause; see [LICENSE](LICENSE).
