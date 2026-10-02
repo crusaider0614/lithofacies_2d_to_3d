@@ -313,6 +313,7 @@ def get_gen_model(cfg, additional_channel=0):
         cfg.MODEL.GEN_CHANNELS,
         cfg.MODEL.B_CHANNELS,
         is_norm=cfg.MODEL.GEN_NORM,
+        is_attn=cfg.MODEL.GEN_ATTN,
     )
 
     # load the pre-trained model

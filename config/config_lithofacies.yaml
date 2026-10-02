@@ -35,7 +35,7 @@ MODEL:
   INFO_CHANNELS: 2  # instantaneous phase + instantaneous frequency
   GEN_CHANNELS: 32
   GEN_NORM: True
-  GEN_ATTN: False
+  GEN_ATTN: True
 
 TRAIN:
   BEGIN_EPOCH: 0
