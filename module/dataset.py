@@ -87,12 +87,12 @@ class LithofaciesDataset(Dataset):
             self.facies_data = None
         nz, nx, ny = self.volume_data.shape
 
-        # NOTE: self.volume_data is loaded straight from .npy above and assigned
-        # here as-is -- unlike SeismicVolume's own tag-based constructor (see
-        # module/seismic_data.py), this does NOT divide by the "amp" value
-        # from the .nphead sidecar. Verify this is intentional (e.g. the .npy
-        # files are already normalized) before relying on amplitude scale
-        # being consistent with code paths that go through that constructor.
+        # The training volumes are already RMS-normalized offline, so
+        # self.volume_data is used as-is here. This intentionally skips the
+        # "amp" division that SeismicVolume's own tag-based constructor
+        # applies (see module/seismic_data.py), which is meant for raw volumes
+        # converted from SEG-Y. Real 2D lines are RMS-normalized at test time
+        # instead (see test/test_actual_line.py).
         self.volume_class = SeismicVolume()
         self.volume_class.clean_data(shape=(nz, nx, ny))
         self.volume_class.set_coordi(

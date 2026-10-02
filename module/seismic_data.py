@@ -314,12 +314,10 @@ class SeismicLine:
 
             self.read_nphead(head_path)
             self.data = np.load(data_path)
-            # NOTE: normalizes by the "amp" value read from the .nphead sidecar
-            # (written by convert_line_segy_to_numpy). LithofaciesDataset
-            # (module/dataset.py) loads the same .npy files directly via
-            # np.load and does NOT go through this division -- verify whether
-            # that's intentional (e.g. already-normalized data) before relying
-            # on amplitude scale being consistent between the two code paths.
+            # Scale raw SEG-Y-derived data by the "amp" value from the .nphead
+            # sidecar (written by convert_line_segy_to_numpy). The training
+            # volumes used by LithofaciesDataset are already RMS-normalized
+            # and bypass this division on purpose.
             self.data = self.data / self.amp
             if self.shape != self.data.shape:
                 raise ValueError(f"Data shape mismatch: header says {self.shape}, array is {self.data.shape}")
@@ -581,12 +579,10 @@ class SeismicVolume:
 
             self.read_nphead(head_path)
             self.data = np.load(data_path)
-            # NOTE: normalizes by the "amp" value read from the .nphead sidecar
-            # (written by convert_volume_segy_to_numpy). LithofaciesDataset
-            # (module/dataset.py) loads the same .npy files directly via
-            # np.load and does NOT go through this division -- verify whether
-            # that's intentional (e.g. already-normalized data) before relying
-            # on amplitude scale being consistent between the two code paths.
+            # Scale raw SEG-Y-derived data by the "amp" value from the .nphead
+            # sidecar (written by convert_volume_segy_to_numpy). The training
+            # volumes used by LithofaciesDataset are already RMS-normalized
+            # and bypass this division on purpose.
             self.data = self.data / self.amp
             if self.shape != self.data.shape:
                 raise ValueError(f"Data shape mismatch: header says {self.shape}, array is {self.data.shape}")
