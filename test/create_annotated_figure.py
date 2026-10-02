@@ -1,4 +1,4 @@
-import os, sys, random
+import os, random
 import numpy as np
 import torch
 import yacs.config
@@ -6,11 +6,10 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Patch, FancyBboxPatch, Rectangle
 from PIL import Image
 
-sys.path.insert(0, '/home/oilpire/project/lithofacies_2d_to_3d')
 from module.seismic_data import SeismicVolume, Coordinate
-from network.coordi_network_2 import get_gen_model
+from network.coordi_network import get_gen_model
 from utils.project import get_project_root
-from create_validation_figures import extract_random_line, predict_section, facies_to_rgb
+from test.create_validation_figures import extract_random_line, predict_section, facies_to_rgb
 
 plt.rcParams['font.family'] = 'DejaVu Sans'
 plt.rcParams['font.size'] = 12
@@ -203,7 +202,7 @@ target_dim = 256
 crop_size = (768, 512)
 device = torch.device('cuda:9')
 
-config_file = os.path.join(get_project_root(), 'config', 'config_lithofacies_2.yaml')
+config_file = os.path.join(get_project_root(), 'config', 'config_lithofacies.yaml')
 with open(config_file, 'rt') as f:
     CF = yacs.config.load_cfg(f)
 
@@ -275,8 +274,10 @@ with torch.no_grad():
     fo = predict_section(network, vt_tensor, info_tensor, device, target_dim)
     fo[ft == 0] = 0
     
-    output_path = '/home/oilpire/project/lithofacies_2d_to_3d/test/validation_figures/tdt_25.0/annotated_example.png'
-    volume_img_path = '/home/oilpire/project/lithofacies_2d_to_3d/test/validation_figures/tdt_25.0/devided_volume.png'
+    output_dir = os.path.join(get_project_root(), 'test', 'validation_figures', 'tdt_{:.1f}'.format(tdt))
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = os.path.join(output_dir, 'annotated_example.png')
+    volume_img_path = os.path.join(output_dir, 'devided_volume.png')
     
     create_annotated_figure(
         vt, ft, fo, output_path,

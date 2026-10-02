@@ -12,12 +12,8 @@ from matplotlib.patches import Patch
 from matplotlib.colors import ListedColormap
 from PIL import Image
 
-# Remote server paths - run this script on oilpire server
-import sys
-sys.path.insert(0, '/home/oilpire/project/lithofacies_2d_to_3d')
-
 from module.seismic_data import SeismicVolume, Coordinate, distance
-from network.coordi_network_2 import get_gen_model
+from network.coordi_network import get_gen_model
 from utils.project import get_project_root
 
 
@@ -311,7 +307,7 @@ def main():
     n_samples = 30
     device = torch.device("cuda:9")
 
-    config_file = os.path.join(get_project_root(), "config", "config_lithofacies_2.yaml")
+    config_file = os.path.join(get_project_root(), "config", "config_lithofacies.yaml")
     with open(config_file, "rt") as f_read:
         CF = yacs.config.load_cfg(f_read)
 

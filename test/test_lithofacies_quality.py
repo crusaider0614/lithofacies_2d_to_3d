@@ -7,7 +7,7 @@ import yacs.config
 from torch.utils.data import DataLoader
 
 from module.dataset import LithofaciesDataset
-from network.coordi_network_2 import get_gen_model
+from network.coordi_network import get_gen_model
 from utils.data import show_2d_array
 from utils.project import get_project_root
 
@@ -24,7 +24,7 @@ weight = weight[None] * weight[:, None]
 epoch = 50
 
 # Define
-config_file = os.path.join(get_project_root(), "config", "config_lithofacies_2.yaml")
+config_file = os.path.join(get_project_root(), "config", "config_lithofacies.yaml")
 with open(config_file, "rt") as f_read:
     CF = yacs.config.load_cfg(f_read)
 device = torch.device("cuda:9")

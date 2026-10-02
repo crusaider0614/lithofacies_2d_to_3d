@@ -5,7 +5,7 @@ import yacs.config
 from sklearn.metrics import precision_recall_fscore_support, confusion_matrix
 
 from module.seismic_data import SeismicVolume, Coordinate
-from network.coordi_network_2 import get_gen_model
+from network.coordi_network import get_gen_model
 from utils.project import get_project_root
 
 
@@ -71,7 +71,7 @@ def predict_section(network, vt, info, device):
     return np.argmax(fo, axis=0).astype(np.int32)
 
 
-config_file = os.path.join(get_project_root(), "config", "config_lithofacies_2.yaml")
+config_file = os.path.join(get_project_root(), "config", "config_lithofacies.yaml")
 with open(config_file, "rt") as f_read:
     CF = yacs.config.load_cfg(f_read)
 device = torch.device("cuda:9")

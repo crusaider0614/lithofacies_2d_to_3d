@@ -1,14 +1,13 @@
-import os, sys, random
+import os, random
 import numpy as np
 import torch
 import yacs.config
 from collections import defaultdict
 
-sys.path.insert(0, '/home/oilpire/project/lithofacies_2d_to_3d')
 from module.seismic_data import SeismicVolume, Coordinate
-from network.coordi_network_2 import get_gen_model
+from network.coordi_network import get_gen_model
 from utils.project import get_project_root
-from create_validation_figures import extract_random_line, predict_section
+from test.create_validation_figures import extract_random_line, predict_section
 
 from sklearn.metrics import confusion_matrix, accuracy_score, f1_score
 
@@ -20,7 +19,7 @@ crop_size = (768, 512)
 device = torch.device('cuda:9')
 n_samples = 100
 
-config_file = os.path.join(get_project_root(), 'config', 'config_lithofacies_2.yaml')
+config_file = os.path.join(get_project_root(), 'config', 'config_lithofacies.yaml')
 with open(config_file, 'rt') as f:
     CF = yacs.config.load_cfg(f)
 

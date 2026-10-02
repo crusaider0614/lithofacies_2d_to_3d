@@ -25,13 +25,14 @@ DATASET:
   TRAIN_NUM_DATA: 4000
   VALID_NUM_DATA: 400
   FLIP: True
+  SCALE: False  # TODO: confirm against the config used on the training server
   NOISE: 0.01
   NUM_WORKER: 1
 
 MODEL:
   A_CHANNELS: 1
   B_CHANNELS: 6
-  INFO_CHANNELS: 1
+  INFO_CHANNELS: 2  # instantaneous phase + instantaneous frequency
   GEN_CHANNELS: 32
   GEN_NORM: True
   GEN_ATTN: True
