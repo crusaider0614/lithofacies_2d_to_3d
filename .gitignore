@@ -3,3 +3,4 @@ checkpoint/**
 **/__pycache__/**
 .idea
 !**/.gitkeep
+test/validation_figures/
