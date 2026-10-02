@@ -225,7 +225,7 @@ class InfoUNet(nn.Module):
         )
 
         self.encode2 = nn.Sequential(
-            InfoResBlock(1 * channels, info_channels, 1 * channels, is_norm=is_norm),
+            InfoResBlock(1 * channels, 0, 1 * channels, is_norm=is_norm),
         )
         self.encode3 = nn.Sequential(
             InfoResBlock(1 * channels, 0, 2 * channels, stride=2, is_norm=is_norm),
@@ -253,7 +253,7 @@ class InfoUNet(nn.Module):
 
     def forward(self, x, info):
         e1 = self.conv((x, info))
-        e2 = self.encode2((e1, info))
+        e2 = self.encode2((e1, None))
         e3 = self.encode3((e2, None))
         e4 = self.encode4((e3, None))
         e5 = self.encode5((e4, None))
@@ -330,12 +330,12 @@ if __name__ == "__main__":
     device = "cuda:0"
 
     batch_size = 1
-    gen = InfoUNet(1, 1, 32, 6, is_norm=True, is_attn=True)
+    gen = InfoUNet(1, 2, 32, 6, is_norm=True, is_attn=False)
     gen.apply(init_weights)
     gen = gen.to(device)
 
-    x = torch.randn(batch_size, 1, 512, 512).to(device)
-    info = torch.randn(batch_size, 1, 512, 512).to(device)
+    x = torch.randn(batch_size, 1, 256, 256).to(device)
+    info = torch.randn(batch_size, 2, 256, 256).to(device)
     y = gen(x, info)
     # # y = y[:, :, :32, :32, :32]
     # # info = info[:, :, :32, :32, :32]

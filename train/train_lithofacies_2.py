@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader, DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from module.dataset import LithofaciesDataset
-from network.coordi_network import get_gen_model, DiceLoss
+from network.coordi_network_2 import get_gen_model, DiceLoss
 from utils.project import get_project_root, ValueTracker
 from utils.parallel import setup, cleanup, run_target
 from utils.pytorch import init_weights
@@ -63,7 +63,9 @@ def train(rank, world_size, CF):
         tdt=CF.DATASET.TDT,
         crop_size=CF.DATASET.TRAIN_CROP_SIZE,
         total_length=CF.DATASET.TRAIN_NUM_DATA,
-        is_coordi=True,
+        is_coordi=False,
+        is_inst_phase=True,
+        is_inst_freq=True,
         is_flip=CF.DATASET.FLIP,
         is_scale=CF.DATASET.SCALE,
         noise=CF.DATASET.NOISE,
@@ -91,7 +93,9 @@ def train(rank, world_size, CF):
         tdt=CF.DATASET.TDT,
         crop_size=CF.DATASET.VALID_CROP_SIZE,
         total_length=CF.DATASET.VALID_NUM_DATA,
-        is_coordi=True,
+        is_coordi=False,
+        is_inst_phase=True,
+        is_inst_freq=True,
         is_flip=False,
         is_scale=False,
         noise=0.0,
@@ -147,12 +151,12 @@ def train(rank, world_size, CF):
         # Training
         avg_train_loss.initialize()
         network.train()
-        for i_batch, (vt, ft, cd) in enumerate(train_loader):
+        for i_batch, (vt, ft, info) in enumerate(train_loader):
             vt = vt.to(rank, non_blocking=True)
             ft = ft.to(rank, non_blocking=True)
-            cd = cd.to(rank, non_blocking=True)
+            info = info.to(rank, non_blocking=True)
 
-            fo = network(vt, cd)
+            fo = network(vt, info)
 
             train_loss = train_criterion(fo, ft) + lambda_dice * dice_criterion(fo, ft)
 
@@ -174,12 +178,12 @@ def train(rank, world_size, CF):
         network.eval()
         with torch.no_grad():
             count = 0
-            for i_batch, (vt, ft, cd) in enumerate(valid_loader):
+            for i_batch, (vt, ft, info) in enumerate(valid_loader):
                 vt = vt.to(rank, non_blocking=True)
                 ft = ft.to(rank, non_blocking=True)
-                cd = cd.to(rank, non_blocking=True)
+                info = info.to(rank, non_blocking=True)
 
-                fo = network(vt, cd)
+                fo = network(vt, info)
 
                 valid_loss = valid_criterion(fo, ft) + lambda_dice * dice_criterion(fo, ft)
                 torch.distributed.all_reduce(valid_loss, op=torch.distributed.ReduceOp.SUM)
@@ -219,4 +223,4 @@ def train(rank, world_size, CF):
 
 
 if __name__ == "__main__":
-    main("config_lithofacies.yaml")
+    main("config_lithofacies_2.yaml")

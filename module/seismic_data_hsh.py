@@ -1,7 +1,6 @@
 import os
 import re
 import struct
-import segyio
 
 import numpy as np
 
@@ -137,7 +136,7 @@ def detect_stationary_ends(coordi):
 
 # This subroutine must be modified according to the SEG-Y file format.
 # Shell script in the data directory need to be executed before this subroutine to extract .head, .suhead, .su, and .bin files
-def convert_line_segy_to_numpy(data_pool="southsea", tag=None, is_align_coordi=False, resample=1, sz=None, ez=None):
+def convert_line_segy_to_numpy(data_pool="westsea", tag=None, is_align_coordi=False, resample=1, sz=None, ez=None):
     data_root = os.path.join(get_project_root(), "data", data_pool)
     suhead_path = os.path.join(data_root, tag + ".suhead")
     header_path = os.path.join(data_root, tag + ".head")
@@ -222,95 +221,6 @@ def convert_line_segy_to_numpy(data_pool="southsea", tag=None, is_align_coordi=F
         f.write("dz\t" + str(dz) + "\n")
         f.write("\n" + "trace coordi" + "\n")
         for it in range(nt):
-            f.write(str(it) + "\t" + str(trace_coordi[it, 0]) + "\t" + str(trace_coordi[it, 1]) + "\n")
-
-
-def convert_2d_segy_to_numpy(data_pool="southsea", tag=None, is_align_coordi=False, rescale=1, sz=None, ez=None):
-    data_root = os.path.join(get_project_root(), "data", data_pool)
-
-    segy_path = os.path.join(data_root, tag + ".segy")
-    if not os.path.exists(segy_path):
-        segy_path = os.path.join(data_root, tag + ".sgy")
-
-    with segyio.open(segy_path, "r", ignore_geometry=True) as f:
-        nt = f.tracecount
-        nz = len(f.samples)
-
-        dz_us = segyio.tools.dt(f)
-        dz = dz_us / 1000000
-
-        scalar_coeff = f.attributes(segyio.TraceField.CoordinateUnits)[:]
-        if scalar_coeff.max() == scalar_coeff.min():
-            scaler = 1.0
-            val = scalar_coeff[0]
-            if val < 0:
-                scaler = 1.0 / abs(val)
-            elif val > 0:
-                scaler = float(val)
-
-            sx = f.attributes(segyio.TraceField.SourceX)[:].astype(np.float64) * scaler
-            sy = f.attributes(segyio.TraceField.SourceY)[:].astype(np.float64) * scaler
-        else:
-            raw_sx = f.attributes(segyio.TraceField.SourceX)[:]
-            raw_sy = f.attributes(segyio.TraceField.SourceY)[:]
-            sx = np.zeros_like(raw_sx, dtype=np.float64)
-            sy = np.zeros_like(raw_sy, dtype=np.float64)
-            for i in range(nt):
-                scaler = 1.0
-                val = scalar_coeff[i]
-                if val < 0:
-                    scaler = 1.0 / abs(val)
-                elif val > 0:
-                    scaler = float(val)
-
-                sx[i] = raw_sx[i] * scaler
-                sy[i] = raw_sy[i] * scaler
-
-        trace_coordi = np.stack([sx, sy], axis=1)
-        if is_align_coordi:
-            b = trace_coordi.reshape(-1, 1)
-            A = np.zeros((2 * nt, 4), dtype=np.float64)
-
-            w1 = np.arange(nt) / (nt - 1)
-            w0 = 1 - w1
-
-            A[0::2, 0] = w0
-            A[0::2, 2] = w1
-            A[1::2, 1] = w0
-            A[1::2, 3] = w1
-
-            At = np.transpose(A)
-            x = np.matmul(np.matmul(np.linalg.inv(np.matmul(At, A)), At), b)
-
-            scoordi = Coordinate(x[0], x[1])
-            ecoordi = Coordinate(x[2], x[3])
-            for it in range(nt):
-                coordi = scoordi + (ecoordi - scoordi) * (it / (nt - 1))
-                trace_coordi[it] = [coordi.cx, coordi.cy]
-
-        data = f.trace.raw[:]
-        data = data.T
-
-    sz = 0  if sz is None else sz
-    ez = nz if ez is None else ez
-    rsz = max(sz, 0)
-    rez = min(ez, nz)
-    data = data[rsz: rez]
-    if rescale != 1:
-        rescale = int(rescale)
-        data = data[::rescale]
-        dz = dz * rescale
-
-    fnz, fnt = data.shape
-    amp = np.max(np.abs(data))
-
-    np.save(os.path.join(data_root, tag), data)
-    with open(os.path.join(data_root, tag + ".nphead"), "w") as f:
-        f.write("shape\t" + str(fnz) + "\t" + str(fnt) + "\n")
-        f.write("amp\t" + str(amp) + "\n")
-        f.write("dz\t" + str(dz) + "\n")
-        f.write("\n" + "trace coordi" + "\n")
-        for it in range(fnt):
             f.write(str(it) + "\t" + str(trace_coordi[it, 0]) + "\t" + str(trace_coordi[it, 1]) + "\n")
 
 
@@ -956,40 +866,9 @@ class SeismicVolume:
 if __name__ == "__main__":
     from utils.data import show_2d_array
 
-    "show raw facies data"
-    # file_path = os.path.join(get_project_root(), "data", "southsea", "3dn_facies_process.npy")
-    # facies_data_1 = np.load(file_path)
-    # new_facies_data = np.zeros_like(facies_data_1)
-    # new_facies_data[facies_data_1 == 0] = 0
-    # new_facies_data[facies_data_1 == 1] = 2
-    # new_facies_data[facies_data_1 == 2] = 3
-    # new_facies_data[facies_data_1 == 3] = 3
-    # new_facies_data[facies_data_1 == 4] = 3
-    # new_facies_data[facies_data_1 == 5] = 3
-    # new_facies_data[facies_data_1 == 6] = 4
-    # new_facies_data[facies_data_1 == 7] = 5
-    # facies_data = new_facies_data[128: 128 + 768]
-    # # file_path = os.path.join(get_project_root(), "data", "southsea", "3dn_facies_tbcut.npy")
-    # # facies_data_2 = np.load(file_path)
-    # # print(facies_data_1.shape, facies_data_2.shape)
-    # # facies_data = facies_data_2 - new_facies_data[128: 128 + 768]
-    # # facies_data = np.pad(facies_data, ((1001 - 640 - 63, 63), (0, 0), (0, 0)))
-    # np.save(os.path.join(get_project_root(), "data", "southsea", "3dn_facies_unc.npy"), facies_data)
-    # print(facies_data.shape)
-    # print(
-    #     (facies_data == 0).sum(),
-    #     (facies_data == 1).sum(),
-    #     (facies_data == 2).sum(),
-    #     (facies_data == 3).sum(),
-    #     (facies_data == 4).sum(),
-    #     (facies_data == 5).sum(),
-    #     (facies_data == 6).sum(),
-    #     (facies_data == 7).sum(),
-    # )
-    # for i in range(50, 2000, 100):
-    #     img = facies_data[:, i]
-    #     show_2d_array(img, scale=200, vmin=0, vmax=7, cmap="gray")
-    # exit()
+    convert_line_segy_to_numpy(tag="01.segy")
+
+
     #
     # facies_data = np.load(os.path.join(get_project_root(), "data", "southsea", "3dn_facies_fillbot.npy"))
     # print(facies_data.shape)
@@ -1018,9 +897,3 @@ if __name__ == "__main__":
     # for i in range(50, 2000, 100):
     #     img = new_facies_data[:, i]
     #     show_2d_array(img, scale=200, vmin=0, vmax=5, cmap="gray")
-
-    file_path = os.path.join(get_project_root(), "data", "ssealine_matched")
-    file_list = os.listdir(file_path)
-    for file in file_list:
-        if file[-4:] == "segy":
-            convert_2d_segy_to_numpy("ssealine_matched", file[:-5], is_align_coordi=False, rescale=2, sz=None, ez=None)

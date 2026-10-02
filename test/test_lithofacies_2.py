@@ -7,7 +7,7 @@ import yacs.config
 from torch.utils.data import DataLoader
 
 from module.dataset import LithofaciesDataset
-from network.coordi_network import get_gen_model
+from network.coordi_network_2 import get_gen_model
 from utils.data import show_2d_array
 from utils.project import get_project_root
 
@@ -15,12 +15,14 @@ from utils.project import get_project_root
 epoch = 50
 
 # Define
-config_file = os.path.join(get_project_root(), "config", "config_lithofacies.yaml")
+config_file = os.path.join(get_project_root(), "config", "config_lithofacies_2.yaml")
 with open(config_file, "rt") as f_read:
     CF = yacs.config.load_cfg(f_read)
-device = torch.device("cuda:9")
+device = torch.device("cuda:5")
 tag = CF.TAG
-# tag = "lithofacies_prediction_12.5_unb"
+# tag = "lithofacies_prediction_7.5_pat"
+# tag = "lithofacies_prediction_12.5_pat"
+tag = "lithofacies_prediction_25.0_pat"
 # tag = "lithofacies_prediction_25.0_nnorm"
 print("Tag:", tag)
 
@@ -47,9 +49,11 @@ test_dataset = LithofaciesDataset(
     target_idx=CF.DATASET.VALID_IDX,
     vdt=CF.DATASET.VDT,
     tdt=CF.DATASET.TDT,
-    crop_size=CF.DATASET.VALID_CROP_SIZE,
+    crop_size=(768, 512),
     total_length=10,
-    is_coordi=True,
+    is_coordi=False,
+    is_inst_phase=True,
+    is_inst_freq=True,
     is_flip=False,
     is_scale=False,
     noise=0.0,
@@ -58,15 +62,15 @@ test_loader = DataLoader(test_dataset, batch_size=1, shuffle=True, drop_last=Tru
 
 # Testing
 with torch.no_grad():
-    for vt, ft, cd in test_loader:
+    for vt, ft, info in test_loader:
         vt = vt.to(device)
         ft = ft.to(device)
-        cd = cd.to(device)
+        info = info.to(device)
 
         # ft[ft == 1] = 0
         # ft[ft == 2] = 0
 
-        fo = network(vt, cd)
+        fo = network(vt, info)
         fo = torch.argmax(fo, dim=1)
 
         iz = 200
@@ -76,7 +80,7 @@ with torch.no_grad():
         vt = vt[0].cpu().numpy().squeeze()
         ft = ft[0].cpu().numpy().squeeze()
         fo = fo[0].cpu().numpy().squeeze()
-        fo[ft == 0] = 0
+        # fo[ft == 0] = 0
         hb = -np.ones((vt.shape[0], 4))
 
         # imgs = np.concatenate((

@@ -74,7 +74,10 @@ class LithofaciesDataset(Dataset):
             crop_size=None,
             total_length=1,
             is_coordi=False,
+            is_inst_phase=False,
+            is_inst_freq=False,
             is_flip=False,
+            is_scale=False,
             noise=0.0,
     ):
         self.volume_data = np.load(
@@ -111,12 +114,43 @@ class LithofaciesDataset(Dataset):
             )
             self.facies_class.data = self.facies_data
 
+        self.is_inst_phase = is_inst_phase
+        if self.is_inst_phase:
+            self.inst_phase = SeismicVolume()
+            self.inst_phase.clean_data(shape=(nz, nx, ny))
+            self.inst_phase.set_coordi(
+                Coordinate(0, 0),
+                Coordinate(0, ny - 1),
+                Coordinate(nx - 1, 0),
+                Coordinate(nx - 1, ny - 1)
+            )
+            self.inst_phase.data = np.load(
+                os.path.join(get_project_root(), "data", data_pool, volume_tag + "_inst_phase.npy"),
+                mmap_mode="r",
+            )[:, target_idx[0]: target_idx[1]]
+
+        self.is_inst_freq = is_inst_freq
+        if self.is_inst_freq:
+            self.inst_freq = SeismicVolume()
+            self.inst_freq.clean_data(shape=(nz, nx, ny))
+            self.inst_freq.set_coordi(
+                Coordinate(0, 0),
+                Coordinate(0, ny - 1),
+                Coordinate(nx - 1, 0),
+                Coordinate(nx - 1, ny - 1)
+            )
+            self.inst_freq.data = np.load(
+                os.path.join(get_project_root(), "data", data_pool, volume_tag + "_inst_freq.npy"),
+                mmap_mode="r",
+            )[:, target_idx[0]: target_idx[1]]
+
         self.vdt = vdt
         self.tdt = tdt
 
         self.total_length = total_length
         self.is_coordi = is_coordi
         self.is_flip = is_flip
+        self.is_scale = is_scale
         self.noise = noise
 
         self.crop_size = (crop_size[0], crop_size[1])
@@ -132,33 +166,64 @@ class LithofaciesDataset(Dataset):
             is_withfacies = False
         nz, nx, ny = self.volume_data.shape
 
-        vc_datum, scoordi, ecoordi = extract_random_line(
-            self.volume_class,
-            self.crop_size[1],
-            self.vdt,
-            self.tdt,
-            mode="bilinear",
-        )
-        if is_withfacies:
-            fc_datum, _, _ = extract_random_line(
-                self.facies_class,
+        while True:
+            vc_datum, scoordi, ecoordi = extract_random_line(
+                self.volume_class,
+                self.crop_size[1],
+                self.vdt,
+                self.tdt,
+                mode="bilinear",
+            )
+            if is_withfacies:
+                fc_datum, _, _ = extract_random_line(
+                    self.facies_class,
+                    self.crop_size[1],
+                    self.vdt,
+                    self.tdt,
+                    scoordi=scoordi,
+                    ecoordi=ecoordi,
+                    mode="nearest",
+                )
+                fc_datum = np.round(fc_datum).astype(np.uint8)
+                if np.any(fc_datum != 0):
+                    break
+
+        if self.is_crop:
+            mz = nz // 50
+            while True:
+                sz = random.randint(-mz, nz - self.crop_size[0] + mz)
+                sz = np.clip(sz, 0, nz - self.crop_size[0])
+                ez = sz + self.crop_size[0]
+                if not is_withfacies or np.any(fc_datum[sz: ez] != 0):
+                    break
+            vc_datum = vc_datum[sz: ez]
+            if is_withfacies:
+                fc_datum = fc_datum[sz: ez]
+
+        if self.is_inst_phase:
+            ip_datum, _, _ = extract_random_line(
+                self.inst_phase,
                 self.crop_size[1],
                 self.vdt,
                 self.tdt,
                 scoordi=scoordi,
                 ecoordi=ecoordi,
-                mode="nearest",
+                mode="bilinear",
             )
-            fc_datum = np.round(fc_datum).astype(np.uint8)
-
-        if self.is_crop:
-            mz = nz // 50
-            sz = random.randint(-mz, nz - self.crop_size[0] + mz)
-            sz = np.clip(sz, 0, nz - self.crop_size[0])
-            ez = sz + self.crop_size[0]
-            vc_datum = vc_datum[sz: ez]
-            if is_withfacies:
-                fc_datum = fc_datum[sz: ez]
+            if self.is_crop:
+                ip_datum = ip_datum[sz: ez]
+        if self.is_inst_freq:
+            if_datum, _, _ = extract_random_line(
+                self.inst_freq,
+                self.crop_size[1],
+                self.vdt,
+                self.tdt,
+                scoordi=scoordi,
+                ecoordi=ecoordi,
+                mode="bilinear",
+            )
+            if self.is_crop:
+                if_datum = if_datum[sz: ez]
 
         if self.is_coordi:
             z_coordi = np.linspace(0.5, nz - 0.5, nz, dtype=np.float32)
@@ -173,15 +238,32 @@ class LithofaciesDataset(Dataset):
                 vc_datum = np.flip(vc_datum, axis=1).copy()
                 if is_withfacies:
                     fc_datum = np.flip(fc_datum, axis=1).copy()
+                if self.is_inst_phase:
+                    ip_datum = np.flip(ip_datum, axis=1).copy()
+                if self.is_inst_freq:
+                    if_datum = np.flip(if_datum, axis=1).copy()
+
+        if self.is_scale:
+            scale = random.uniform(0.8, 1.2)
+            vc_datum = vc_datum * scale
 
         if self.noise != 0.0:
             vc_datum += self.noise * np.random.randn(self.crop_size[0], self.crop_size[1]).astype(np.float32)
 
+        info_list = []
+        if self.is_coordi:
+            info_list.append(z_coordi[None])
+        if self.is_inst_phase:
+            info_list.append(ip_datum[None])
+        if self.is_inst_freq:
+            info_list.append(if_datum[None])
+
         output = (vc_datum[None],)
         if is_withfacies:
             output = output + (fc_datum.astype(np.int64),)
-        if self.is_coordi:
-            output = output + (z_coordi[None],)
+        if info_list:
+            info = np.concatenate(info_list, axis=0)
+            output = output + (info,)
         return output[0] if len(output) == 1 else output
 
 
@@ -193,14 +275,17 @@ if  __name__ == "__main__":
     train_set = LithofaciesDataset(
         data_pool="southsea",
         volume_tag="3dn_tbcut",
-        facies_tag="3dn_facies_tbcut",
-        target_idx=(2000, 2667),
-        vdt=12.5,
+        facies_tag="3dn_facies_unc",
+        target_idx=(0, 2667),
+        vdt=25.0,
         tdt=25.0,
-        crop_size=(756, 512),
+        crop_size=(256, 256),
         total_length=2000,
-        is_coordi=True,
+        is_coordi=False,
+        is_inst_phase=True,
+        is_inst_freq=True,
         is_flip=True,
+        is_scale=True,
         noise=0.01,
     )
     train_loader = DataLoader(train_set, batch_size=1, shuffle=False)
@@ -208,15 +293,16 @@ if  __name__ == "__main__":
     import time
     with torch.no_grad():
         start_time = time.time()
-        for i, (vt, ft, cd) in enumerate(train_loader):
+        for i, (vt, ft, info) in enumerate(train_loader):
             print(time.time() - start_time)
 
             vt = vt[0].cpu().numpy().squeeze()
             ft = ft[0].cpu().numpy().squeeze() / 5
-            cd = cd[0].cpu().numpy().squeeze()
+            ips = info[0, 0].cpu().numpy().squeeze()
+            ifs = info[0, 1].cpu().numpy().squeeze()
             hb = np.zeros((vt.shape[0], 4))
 
             imgs = np.concatenate((
-                vt, hb, ft, hb, cd,
+                vt, hb, ft, hb, ips, hb, ifs,
             ), axis=1)
             show_2d_array(imgs, scale=100)
