@@ -64,7 +64,8 @@ because of the data provider's restrictions. The following are available at:
 - 2D lines extracted from the validation part of the 3D volume, with the lithofacies labels and
   the info input along them, as examples of the synthetic lines (see below).
 
-Place them as follows:
+Everything is in one archive, `lithofacies_2d_to_3d_data_and_models.zip`. Unzip it and copy its
+`checkpoint/` and `data/` folders into the repository root, so the layout matches:
 
 ```
 checkpoint/
