@@ -247,8 +247,8 @@ def convert_2d_segy_to_numpy(data_pool="southsea", tag=None, is_align_coordi=Fal
     positive: multiply; 0: 1). The standard coordinate scalar field (bytes 71-72) is not read.
     amp is the maximum absolute amplitude after cropping. is_align_coordi, sz and ez work as in
     convert_line_segy_to_numpy; rescale keeps every `rescale`-th sample (dz is multiplied).
-    Stationary end traces are not trimmed. The real lines in data/ssealine_matched were made
-    with this function (see __main__ below).
+    Stationary end traces are not trimmed. The real lines used in the paper were made with this
+    function (see __main__ below); the released ones are data/open_data_2d/actual_line_*.
     """
     data_root = os.path.join(get_project_root(), "data", data_pool)
 

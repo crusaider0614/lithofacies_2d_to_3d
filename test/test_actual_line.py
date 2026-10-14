@@ -1,6 +1,6 @@
 """Inference on real (field) 2D seismic lines.
 
-Applies the trained models to the real 2D lines stored in data/ssealine_matched/. For each
+Applies the trained models to the real 2D lines stored in data/open_data_2d/. For each
 line listed in ``line_range``:
   1. load the line (<name>.npy amplitude + <name>.nphead header with trace coordinates; see
      module.seismic_data.SeismicLine), keep at most the first 1001 samples and the trace
@@ -13,12 +13,12 @@ line listed in ``line_range``:
      percentile and scaled to [-1, 1]), as process/compute_inst_attribute.py does for the 3D volume;
   4. predict with overlapping 256 x 256 tiles blended by a raised-cosine window, and
      display prediction above amplitude.
-Writing the prediction to SEG-Y (data/ssealine_matched/lithofacies/new_<name>.segy) is
+Writing the prediction to SEG-Y (data/open_data_2d/lithofacies/new_<name>.segy) is
 present but commented out at the end of the loop.
 
 Reads:  config/config_lithofacies.yaml,
         checkpoint/lithofacies_prediction_7.5_pat_047, ..._12.5_pat_049, ..._25.0_pat_044,
-        data/ssealine_matched/<name>.npy and <name>.nphead for each name in ``line_range``.
+        data/open_data_2d/<name>.npy and <name>.nphead for each name in ``line_range``.
 Writes: nothing while the SEG-Y export is commented out; figures are shown on screen.
 
 Run from the repo root (running by file path fails because the repo root is then not on
@@ -86,7 +86,7 @@ network_3 = network_3.eval()
 sample_interval = 4000  # microseconds, for the (commented-out) SEG-Y export
 dt = 0.004  # sample interval in seconds
 
-# Lines to process: {file name in data/ssealine_matched/ (without extension): (first trace,
+# Lines to process: {file name in data/open_data_2d/ (without extension): (first trace,
 # end trace)}; end trace -1 means "to the end". The trace windows trim unusable parts of each
 # line. The released lines are named after the model their trace spacing selects.
 line_range = {
@@ -96,7 +96,7 @@ line_range = {
 }
 
 for name in line_range.keys():
-    line = SeismicLine(data_pool="ssealine_matched", tag=name)
+    line = SeismicLine(data_pool="open_data_2d", tag=name)
     # Mean trace spacing of the line (m), from its fitted start/end coordinates.
     ldt = distance(line.scoordi, line.ecoordi) / (line.shape[1] - 1)
 
@@ -241,4 +241,4 @@ for name in line_range.keys():
         #
         #     stream.append(trace)
         #
-        # stream.write(os.path.join(get_project_root(), "data", "ssealine_matched", "lithofacies", "new_" + name + ".segy"), format="SEGY", data_encoding=2)
+        # stream.write(os.path.join(get_project_root(), "data", "open_data_2d", "lithofacies", "new_" + name + ".segy"), format="SEGY", data_encoding=2)

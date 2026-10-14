@@ -72,18 +72,18 @@ checkpoint/
   lithofacies_prediction_12.5_pat_049
   lithofacies_prediction_25.0_pat_044
   lithofacies_prediction_{7.5,12.5,25.0}_pat_050   epoch-50 checkpoints (loss histories)
-data/ssealine_matched/
-  actual_line_7.5.npy, .nphead  real 2D line, trace spacing ~7.5 m (7.5 m model)
-  actual_line_12.5.npy, .nphead real 2D line, trace spacing ~12.3 m (12.5 m model)
-  actual_line_25.0.npy, .nphead real 2D line, trace spacing ~24.5 m (25.0 m model)
-                                (amplitude (nz, nt) and a text header with synthetic trace
-                                coordinates, see below)
-data/TODO/                      2D lines extracted from the 3D volume (TODO: file names), each with
-                                amplitude (768, 512), lithofacies labels (768, 512; classes 0-5)
-                                and the info input (2, 768, 512; inst. phase, inst. frequency)
+data/open_data_2d/                real 2D lines: amplitude (nz, nt) float32 and a text header
+                                  with synthetic trace coordinates (see below)
+  actual_line_7.5.npy, .nphead    trace spacing ~7.5 m (7.5 m model), 1251 x 1194
+  actual_line_12.5.npy, .nphead   trace spacing ~12.3 m (12.5 m model), 1000 x 1344
+  actual_line_25.0.npy, .nphead   trace spacing ~24.5 m (25.0 m model), 1537 x 799
+data/open_data_3d/                lines extracted from the 3D volume, one per TDT (7.5, 12.5, 25.0)
+  seismic_<tdt>.npy               amplitude (768, 512) float32
+  lithofacies_<tdt>.npy           lithofacies labels (768, 512) int64, class indices
+  inst_phase_freq_<tdt>.npy       info input (2, 768, 512) float32: inst. phase, inst. frequency
 ```
 
-The lines extracted from the 3D volume were drawn with `LithofaciesDataset` (`module/dataset.py`)
+The lines in `data/open_data_3d/` were drawn with `LithofaciesDataset` (`module/dataset.py`)
 from the validation part of the volume (axis-1 indices 2000-2667, `DATASET.VALID_IDX`, not used
 for training), with `vdt=12.5`, `tdt` set to the model's trace spacing, `crop_size=(768, 512)`,
 the instantaneous phase and frequency as info channels, and no augmentation (no flip, amplitude
