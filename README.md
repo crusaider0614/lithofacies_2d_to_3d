@@ -74,10 +74,31 @@ checkpoint/
   lithofacies_prediction_{7.5,12.5,25.0}_pat_050   epoch-50 checkpoints (loss histories)
 data/ssealine_matched/
   <n>.npy, <n>.nphead           real 2D lines (one per trace spacing): amplitude (nz, nt) and a
-                                text header with the trace coordinates
+                                text header with synthetic trace coordinates (see below)
 data/TODO/                      2D line extracted from the 3D volume (TODO: file names)
   TODO.npy                      amplitude (nz, nt)
   TODO.npy                      lithofacies labels (nz, nt), classes 0-5
+```
+
+The survey coordinates of the real lines cannot be published. In the released `.nphead` headers
+the trace coordinates are replaced by synthetic ones: trace `i` is placed at `(i * d, 0)`, where
+`d` is the line's mean trace spacing in metres. `test/test_actual_line.py` uses the coordinates
+only to compute this spacing and pick the model with the nearest TDT, so the predictions are the
+same as with the survey coordinates. The coordinates do not give the line's location, and the
+SEG-Y export in that script (commented out) would write these synthetic coordinates. Header
+format (tab-separated; `amp` is the value the amplitudes are divided by on loading, and `dz` the
+sample interval in seconds):
+
+```
+shape	<nz>	<nt>
+amp	<amp>
+dz	<dz>
+
+trace coordi
+0	0.0	0.0
+1	<d>	0.0
+2	<2d>	0.0
+...
 ```
 
 | Trace spacing (TDT) | Checkpoint | Epoch |
