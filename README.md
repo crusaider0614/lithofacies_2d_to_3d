@@ -90,8 +90,7 @@ nearest-neighbour interpolation, the info channels come from the precomputed 3D 
 volumes, the trace spacing of each line varies randomly by up to +/-10 % around `tdt`, and the
 depth window is drawn so that it contains at least one non-zero label. The amplitude is taken
 directly from the 3D volume, which is RMS-normalized to 0.15 as a whole, so it can be fed to the
-network as is, as in training. (The evaluation scripts in `test/` additionally rescale each line
-or crop to an RMS of 0.15 before inference.)
+network as is, as in training.
 
 The survey coordinates of the real lines cannot be published. In the released `.nphead` headers
 the trace coordinates are replaced by synthetic ones: trace `i` is placed at `(i * d, 0)`, where
