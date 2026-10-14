@@ -1,10 +1,10 @@
 """Inference on real (field) 2D seismic lines.
 
 Applies the trained models to the real 2D lines stored in data/ssealine_matched/. For each
-line listed in ``idx_range``:
-  1. load the line (<n>.npy amplitude + <n>.nphead header with trace coordinates; see
+line listed in ``line_range``:
+  1. load the line (<name>.npy amplitude + <name>.nphead header with trace coordinates; see
      module.seismic_data.SeismicLine), keep at most the first 1001 samples and the trace
-     range given in ``idx_range`` (reflect-padding to 256 traces if the line is narrower);
+     range given in ``line_range`` (reflect-padding to 256 traces if the line is narrower);
   2. compute the line's mean trace spacing from the straight-line fit of its trace
      coordinates (whole line, before trimming) and pick the model whose
      training trace spacing TDT (7.5 / 12.5 / 25.0 m) is nearest to it;
@@ -13,12 +13,12 @@ line listed in ``idx_range``:
      percentile and scaled to [-1, 1]), as process/compute_inst_attribute.py does for the 3D volume;
   4. predict with overlapping 256 x 256 tiles blended by a raised-cosine window, and
      display prediction above amplitude.
-Writing the prediction to SEG-Y (data/ssealine_matched/lithofacies/new_<idx>.segy) is
+Writing the prediction to SEG-Y (data/ssealine_matched/lithofacies/new_<name>.segy) is
 present but commented out at the end of the loop.
 
 Reads:  config/config_lithofacies.yaml,
         checkpoint/lithofacies_prediction_7.5_pat_047, ..._12.5_pat_049, ..._25.0_pat_044,
-        data/ssealine_matched/<idx + 1>.npy and <idx + 1>.nphead.
+        data/ssealine_matched/<name>.npy and <name>.nphead for each name in ``line_range``.
 Writes: nothing while the SEG-Y export is commented out; figures are shown on screen.
 
 Run from the repo root (running by file path fails because the repo root is then not on
@@ -27,7 +27,7 @@ sys.path):
     python -m test.test_actual_line
 
 There is no CLI. Edit the module-level settings (``device``, checkpoint tags/epochs,
-``idx_range``).
+``line_range``).
 """
 import os
 import numpy as np
@@ -86,17 +86,17 @@ network_3 = network_3.eval()
 sample_interval = 4000  # microseconds, for the (commented-out) SEG-Y export
 dt = 0.004  # sample interval in seconds
 
-# Lines to process: {line index: (first trace, end trace)}; end trace -1 means "to the end".
-# The trace windows trim unusable parts of each line. The data file loaded for key idx is
-# data/ssealine_matched/<idx + 1>.npy (1-based file names).
-idx_range = {
-    66: (0, -1),     # 67.npy, trace spacing ~12.3 m -> 12.5 m model
-    82: (0, 1130),   # 83.npy, trace spacing ~7.5 m -> 7.5 m model
-    144: (45, -1),   # 145.npy, trace spacing ~24.5 m -> 25.0 m model
+# Lines to process: {file name in data/ssealine_matched/ (without extension): (first trace,
+# end trace)}; end trace -1 means "to the end". The trace windows trim unusable parts of each
+# line. The released lines are named after the model their trace spacing selects.
+line_range = {
+    "actual_line_7.5": (0, 1130),   # trace spacing ~7.5 m
+    "actual_line_12.5": (0, -1),    # trace spacing ~12.3 m
+    "actual_line_25.0": (45, -1),   # trace spacing ~24.5 m
 }
 
-for idx in idx_range.keys():
-    line = SeismicLine(data_pool="ssealine_matched", tag=str(idx + 1))
+for name in line_range.keys():
+    line = SeismicLine(data_pool="ssealine_matched", tag=name)
     # Mean trace spacing of the line (m), from its fitted start/end coordinates.
     ldt = distance(line.scoordi, line.ecoordi) / (line.shape[1] - 1)
 
@@ -108,8 +108,8 @@ for idx in idx_range.keys():
     else:
         vt = line.data[:1001]
 
-    isx = idx_range[idx][0]
-    iex = idx_range[idx][1] if idx_range[idx][1] > 0 else vt.shape[1]
+    isx = line_range[name][0]
+    iex = line_range[name][1] if line_range[name][1] > 0 else vt.shape[1]
     vt = vt[:, isx: iex]
 
     # Lines narrower than one tile are reflect-padded to target_dim traces.
@@ -132,7 +132,7 @@ for idx in idx_range.keys():
     else:
         network = network_3
 
-    print(idx, vt.shape, tdt, ldt, isx, iex)
+    print(name, vt.shape, tdt, ldt, isx, iex)
 
     nz, nt = vt.shape
 
@@ -241,4 +241,4 @@ for idx in idx_range.keys():
         #
         #     stream.append(trace)
         #
-        # stream.write(os.path.join(get_project_root(), "data", "ssealine_matched", "lithofacies", "new_" + str(idx) + ".segy"), format="SEGY", data_encoding=2)
+        # stream.write(os.path.join(get_project_root(), "data", "ssealine_matched", "lithofacies", "new_" + name + ".segy"), format="SEGY", data_encoding=2)

@@ -73,9 +73,9 @@ checkpoint/
   lithofacies_prediction_25.0_pat_044
   lithofacies_prediction_{7.5,12.5,25.0}_pat_050   epoch-50 checkpoints (loss histories)
 data/ssealine_matched/
-  67.npy, 67.nphead             real 2D line, trace spacing ~12.3 m (12.5 m model)
-  83.npy, 83.nphead             real 2D line, trace spacing ~7.5 m (7.5 m model)
-  145.npy, 145.nphead           real 2D line, trace spacing ~24.5 m (25.0 m model)
+  actual_line_7.5.npy, .nphead  real 2D line, trace spacing ~7.5 m (7.5 m model)
+  actual_line_12.5.npy, .nphead real 2D line, trace spacing ~12.3 m (12.5 m model)
+  actual_line_25.0.npy, .nphead real 2D line, trace spacing ~24.5 m (25.0 m model)
                                 (amplitude (nz, nt) and a text header with synthetic trace
                                 coordinates, see below)
 data/TODO/                      2D lines extracted from the 3D volume (TODO: file names), each with
@@ -155,9 +155,8 @@ Run every script from the repository root as a module. Running a script by path
 Scripts have no command-line arguments: edit the constants at the top of each file (device, tag,
 epoch, ...) instead.
 
-**With the released data**: predict the real 2D lines. `idx_range` in `test/test_actual_line.py`
-lists the three released lines (the key is the file number minus 1, e.g. `66` for `67.npy`,
-with the trace window used for each line), then
+**With the released data**: predict the real 2D lines. `line_range` in `test/test_actual_line.py`
+lists the three released lines by file name, with the trace window used for each line, then
 ```bash
 python -m test.test_actual_line
 ```
