@@ -1,7 +1,7 @@
 # Lithofacies Prediction 2D to 3D
 
 Source code for the second stage of the paper "Integrated Rock Physics, Seismic, and Machine
-Learning Methodology for Regional 3D Lithofacies Modeling - A Case Study from the Jeju Basin,
+Learning Methodology for Regional 3D Lithofacies Modelling - A Case Study from the Jeju Basin,
 Offshore Korea."
 
 A segmentation network (InfoUNet) is trained on synthetic 2D lines cut from a labeled 3D seismic
@@ -56,7 +56,7 @@ run on Windows or with `DEVICE: "cpu"`.
 The 3D seismic volume and the 3D lithofacies model used for training cannot be redistributed
 because of the data provider's restrictions. The following are available at:
 
-> **TODO: add the share link.**
+> **Google Drive:** https://drive.google.com/drive/folders/1LpIzCKCz_BB4b5EsLzD6gJjRi3wfYJ8g?usp=drive_link
 
 - the trained models, and the epoch-50 checkpoints that hold the loss histories;
 - one real 2D seismic line for each trace spacing (7.5, 12.5 and 25.0 m), as used by
@@ -199,7 +199,21 @@ amplitude section.
 
 ## Citation
 
-> **TODO: add the paper citation.**
+Han, S., Cho, Y., Lee, M. J., Jun, J., Paik, S., & Lee, J.-W. (2026). Integrated Rock Physics,
+Seismic, and Machine Learning Methodology for Regional 3D Lithofacies Modelling - A Case Study
+from the Jeju Basin, Offshore Korea. *Geophysical Journal International*, ggag411.
+https://doi.org/10.1093/gji/ggag411
+
+```bibtex
+@article{han2026lithofacies,
+  author  = {Han, Seunghoon and Cho, Yongchae and Lee, Min Je and Jun, Jaeho and Paik, Seik and Lee, Jun-Woo},
+  title   = {Integrated Rock Physics, Seismic, and Machine Learning Methodology for Regional {3D} Lithofacies Modelling -- A Case Study from the {Jeju Basin}, Offshore {Korea}},
+  journal = {Geophysical Journal International},
+  year    = {2026},
+  pages   = {ggag411},
+  doi     = {10.1093/gji/ggag411}
+}
+```
 
 ## License
 
