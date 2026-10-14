@@ -61,8 +61,8 @@ because of the data provider's restrictions. The following are available at:
 - the trained models, and the epoch-50 checkpoints that hold the loss histories;
 - one real 2D seismic line for each trace spacing (7.5, 12.5 and 25.0 m), as used by
   `test/test_actual_line.py`;
-- one 2D line extracted from the 3D volume together with the lithofacies model along it, as an
-  example of the synthetic training lines (amplitude + labels).
+- 2D lines extracted from the validation part of the 3D volume, with the lithofacies labels and
+  the info input along them, as examples of the synthetic lines (see below).
 
 Place them as follows:
 
@@ -75,10 +75,21 @@ checkpoint/
 data/ssealine_matched/
   <n>.npy, <n>.nphead           real 2D lines (one per trace spacing): amplitude (nz, nt) and a
                                 text header with synthetic trace coordinates (see below)
-data/TODO/                      2D line extracted from the 3D volume (TODO: file names)
-  TODO.npy                      amplitude (nz, nt)
-  TODO.npy                      lithofacies labels (nz, nt), classes 0-5
+data/TODO/                      2D lines extracted from the 3D volume (TODO: file names), each with
+                                amplitude (768, 512), lithofacies labels (768, 512; classes 0-5)
+                                and the info input (2, 768, 512; inst. phase, inst. frequency)
 ```
+
+The lines extracted from the 3D volume were drawn with `LithofaciesDataset` (`module/dataset.py`)
+from the validation part of the volume (axis-1 indices 2000-2667, `DATASET.VALID_IDX`, not used
+for training), with `vdt=12.5`, `tdt` set to the model's trace spacing, `crop_size=(768, 512)`,
+the instantaneous phase and frequency as info channels, and no augmentation (no flip, amplitude
+scaling or noise). They are therefore larger than the 256 x 256 training crops and are predicted
+with overlapping 256 x 256 tiles. Everything else is as in training: the labels are sampled with
+nearest-neighbour interpolation, the info channels come from the precomputed 3D attribute
+volumes, the trace spacing of each line varies randomly by up to +/-10 % around `tdt`, and the
+depth window is drawn so that it contains at least one non-zero label. The amplitude is not
+rescaled per line; rescale it to an RMS of 0.15 before inference, as the evaluation scripts do.
 
 The survey coordinates of the real lines cannot be published. In the released `.nphead` headers
 the trace coordinates are replaced by synthetic ones: trace `i` is placed at `(i * d, 0)`, where
