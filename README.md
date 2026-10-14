@@ -53,26 +53,31 @@ run on Windows or with `DEVICE: "cpu"`.
 
 ## Data and trained models
 
-The full field datasets used in the study are not publicly available due to institutional data-sharing
-restrictions. A curated subset for testing and the trained models are available at:
+The 3D seismic volume and the 3D lithofacies model used for training cannot be redistributed
+because of the data provider's restrictions. The following are available at:
 
 > **TODO: add the share link.**
+
+- the trained models, and the epoch-50 checkpoints that hold the loss histories;
+- one real 2D seismic line for each trace spacing (7.5, 12.5 and 25.0 m), as used by
+  `test/test_actual_line.py`;
+- one 2D line extracted from the 3D volume together with the lithofacies model along it, as an
+  example of the synthetic training lines (amplitude + labels).
 
 Place them as follows:
 
 ```
-data/southsea/
-  3dn_tbcut.npy                 3D seismic volume (nz, nx, ny), RMS-normalized to 0.15
-  3dn_facies_unc.npy            3D facies labels, same shape
-  3dn_tbcut_inst_phase.npy      created by process/compute_inst_attribute.py
-  3dn_tbcut_inst_freq.npy       created by process/compute_inst_attribute.py
-data/ssealine_matched/
-  <n>.npy, <n>.nphead           real 2D lines for test/test_actual_line.py
 checkpoint/
   lithofacies_prediction_7.5_pat_047
   lithofacies_prediction_12.5_pat_049
   lithofacies_prediction_25.0_pat_044
   lithofacies_prediction_{7.5,12.5,25.0}_pat_050   epoch-50 checkpoints (loss histories)
+data/ssealine_matched/
+  <n>.npy, <n>.nphead           real 2D lines (one per trace spacing): amplitude (nz, nt) and a
+                                text header with the trace coordinates
+data/TODO/                      2D line extracted from the 3D volume (TODO: file names)
+  TODO.npy                      amplitude (nz, nt)
+  TODO.npy                      lithofacies labels (nz, nt), classes 0-5
 ```
 
 | Trace spacing (TDT) | Checkpoint | Epoch |
@@ -94,12 +99,35 @@ reported metrics.
 Real 2D lines are rescaled to an RMS amplitude of 0.15 before inference, matching the training
 volume.
 
+Training, `process/compute_inst_attribute.py` and every script that draws synthetic lines from
+the 3D volume (`test/test_lithofacies*.py`, `test/evaluate_*.py`, `test/create_*.py`) need the
+3D data, which are not distributed. They expect this layout (paths set in
+`config/config_lithofacies.yaml`):
+
+```
+data/southsea/
+  3dn_tbcut.npy                 3D seismic volume (nz, nx, ny), RMS-normalized to 0.15
+  3dn_facies_unc.npy            3D facies labels, same shape
+  3dn_tbcut_inst_phase.npy      created by process/compute_inst_attribute.py
+  3dn_tbcut_inst_freq.npy       created by process/compute_inst_attribute.py
+```
+
 ## Usage
 
 Run every script from the repository root as a module. Running a script by path
 (`python test/evaluate_accuracy.py`) fails because the repository root is then not on `sys.path`.
 Scripts have no command-line arguments: edit the constants at the top of each file (device, tag,
 epoch, ...) instead.
+
+**With the released data**: predict the real 2D lines. List the released lines in `idx_range` in
+`test/test_actual_line.py` (the key is the file number minus 1, e.g. `0` for `1.npy`), then
+```bash
+python -m test.test_actual_line
+```
+The model is chosen from each line's trace spacing, and the prediction is shown above the
+amplitude section.
+
+**With a labeled 3D volume** (not distributed):
 
 1. Precompute the instantaneous attributes (once):
    ```bash

@@ -95,6 +95,23 @@ def distance(coordi1, coordi2):
     return (((coordi2 - coordi1)**2.0).sum())**0.5
 
 
+class Trace:
+    """A single 1D trace with its map coordinate."""
+
+    def __init__(self, data, coordi):
+        self.data = data
+        self.nz = self.data.shape[0]
+        self.coordi = coordi
+
+    def set_data(self, data):
+        assert len(data.shape) == 1
+        self.data = data
+        self.nz = self.data.shape[0]
+
+    def set_coordi(self, coordi):
+        self.coordi = coordi
+
+
 def detect_stationary_ends(coordi):
     """Slice bounds that drop traces at either end of a 2D line whose coordinates do not move.
 
@@ -181,7 +198,7 @@ def convert_line_segy_to_numpy(data_pool="southsea", tag=None, is_align_coordi=F
                 A[2 * it + 1, 1] = (nt - 1 - it) / (nt - 1)
                 A[2 * it + 1, 3] = it / (nt - 1)
             At = np.transpose(A)
-            x = np.matmul(np.matmul(np.linalg.inv(np.matmul(At, A)), At), b)
+            x = np.matmul(np.matmul(np.linalg.inv(np.matmul(At, A)), At), b)[:, 0]  # 1-D, so x[i] is a scalar (numpy >= 2)
             scoordi = Coordinate(x[0], x[1])
             ecoordi = Coordinate(x[2], x[3])
             for it in range(nt):
@@ -287,7 +304,7 @@ def convert_2d_segy_to_numpy(data_pool="southsea", tag=None, is_align_coordi=Fal
             A[1::2, 3] = w1
 
             At = np.transpose(A)
-            x = np.matmul(np.matmul(np.linalg.inv(np.matmul(At, A)), At), b)
+            x = np.matmul(np.matmul(np.linalg.inv(np.matmul(At, A)), At), b)[:, 0]  # 1-D, so x[i] is a scalar (numpy >= 2)
 
             scoordi = Coordinate(x[0], x[1])
             ecoordi = Coordinate(x[2], x[3])
@@ -327,8 +344,7 @@ class SeismicLine:
     """2D section data (nz, nt) along a straight line from scoordi (trace 0) to ecoordi (trace nt-1).
 
     tag=None gives an empty 1x1 line to be filled via clean_data/set_coordi. `dp` holds the
-    per-trace weight accumulated by insert_trace_idx, which SeismicVolume.get_line uses to
-    write the sampled traces into the line.
+    per-trace weight accumulated by insert_trace_* (weighted stacking of inserted traces).
     """
 
     def __init__(self, data_pool="southsea", tag=None):
@@ -386,7 +402,7 @@ class SeismicLine:
                 A[2 * it + 1, 1] = (nt - 1 - it) / (nt - 1)
                 A[2 * it + 1, 3] = it / (nt - 1)
             At = np.transpose(A)
-            x = np.matmul(np.matmul(np.linalg.inv(np.matmul(At, A)), At), b)
+            x = np.matmul(np.matmul(np.linalg.inv(np.matmul(At, A)), At), b)[:, 0]  # 1-D, so x[i] is a scalar (numpy >= 2)
             self.scoordi = Coordinate(x[0], x[1])
             self.ecoordi = Coordinate(x[2], x[3])
 
@@ -399,12 +415,59 @@ class SeismicLine:
             self.shape = shape
             self.dp = np.zeros(self.shape[1:], dtype=np.float32)
 
+    def set_amp(self, amp=None):
+        self.amp = amp if amp is not None else np.max(np.abs(self.data))
+        self.data = self.data / self.amp
+
     def set_coordi(self, scoordi=None, ecoordi=None):
         self.scoordi = scoordi if scoordi is not None else self.scoordi
         self.ecoordi = ecoordi if ecoordi is not None else self.ecoordi
 
+    def cut_zaxis(self, sz, ez):
+        rsz = max(sz, 0)
+        rez = min(ez, self.shape[0])
+
+        self.data = self.data[rsz: rez]
+        self.shape = self.data.shape
+
     def idx_to_coordi(self, it):
         return self.scoordi + (self.ecoordi - self.scoordi) * (it / (self.shape[1] - 1))
+
+    def coordi_to_idx(self, coordi):
+        """Project coordi onto the line: returns (fractional trace index, closest point, signed distance)."""
+        grad = self.ecoordi - self.scoordi
+        a = -grad.cy
+        b = grad.cx
+        ab_sqsum = a * a + b * b
+        c = -(a * self.scoordi.cx + b * self.scoordi.cy)
+        distance = (a * coordi.cx + b * coordi.cy + c) / ab_sqsum**0.5
+        closest = Coordinate(
+            (b * (b * coordi.cx - a * coordi.cy) - a * c) / ab_sqsum,
+            (a * (a * coordi.cy - b * coordi.cx) - b * c) / ab_sqsum
+        )
+        if grad.cx != 0:
+            it = (self.shape[1] - 1) * ((closest.cx - self.scoordi.cx) / grad.cx)
+        else:
+            it = (self.shape[1] - 1) * ((closest.cy - self.scoordi.cy) / grad.cy)
+        return it, closest, distance
+
+    def get_trace_idx(self, it):
+        """Trace at fractional index it (linear interpolation); zeros outside the line."""
+        if it < 0 or it > self.shape[1] - 1:
+            trace = np.zeros(self.shape[0], dtype=np.float32)
+        else:
+            if abs(round(it) - it) < 0.01:
+                trace = self.data[:, int(round(it))]
+            else:
+                portion = it - np.floor(it)
+                pre_trace = self.data[:, int(np.floor(it))]
+                pro_trace = self.data[:, int(np.ceil(it))]
+                trace = portion * pro_trace + (1.0 - portion) * pre_trace
+        return trace
+
+    def get_trace_coordi(self, coordi):
+        it, _, _ = self.coordi_to_idx(coordi)
+        return self.get_trace_idx(it)
 
     def insert_trace_idx(self, new_trace, it):
         """Stack new_trace at fractional index it, split linearly between the two neighbouring traces."""
@@ -427,6 +490,15 @@ class SeismicLine:
                 pro_weight = self.dp[int(np.ceil(it))]
                 self.data[:, int(np.ceil(it))] = add_weighted_avg(pro_trace, pro_weight, new_trace, portion)
                 self.dp[int(np.ceil(it))] += portion
+
+    def insert_trace_coordi(self, new_trace, coordi, max_distance=10.0):
+        """Stack new_trace at the projection of coordi if its distance to the line is < max_distance."""
+        it, _, distance = self.coordi_to_idx(coordi)
+        # coordi_to_idx returns a signed distance (negative on one side of the line).
+        if abs(distance) < max_distance:
+            self.insert_trace_idx(new_trace, it)
+        else:
+            print("Too far distance: ", distance)
 
 
 # Same input files and header-offset caveats as convert_line_segy_to_numpy.
@@ -496,7 +568,7 @@ def convert_volume_segy_to_numpy(data_pool="southsea", tag=None, is_align_coordi
                     A[2 * it + 1, 5] = ix * (ny - 1 - iy) / (nx - 1) / (ny - 1)
                     A[2 * it + 1, 7] = ix * iy / (nx - 1) / (ny - 1)
             At = np.transpose(A)
-            x = np.matmul(np.matmul(np.linalg.inv(np.matmul(At, A)), At), b)
+            x = np.matmul(np.matmul(np.linalg.inv(np.matmul(At, A)), At), b)[:, 0]  # 1-D, so x[i] is a scalar (numpy >= 2)
             corner_coordi = [
                 [Coordinate(x[0], x[1]), Coordinate(x[2], x[3])],
                 [Coordinate(x[4], x[5]), Coordinate(x[6], x[7])],
@@ -578,6 +650,7 @@ class SeismicVolume:
             self.data = self.data / self.amp
             if self.shape != self.data.shape:
                 raise ValueError(f"Data shape mismatch: header says {self.shape}, array is {self.data.shape}")
+            self.dp = np.ones(self.shape[1:], dtype=np.float32)
 
     def read_nphead(self, header_path):
         """Parse a volume .nphead; corner_coordi is a least-squares bilinear fit to the trace coordinates."""
@@ -620,7 +693,7 @@ class SeismicVolume:
                     A[2 * it + 1, 5] = ix * (ny - 1 - iy) / (nx - 1) / (ny - 1)
                     A[2 * it + 1, 7] = ix * iy / (nx - 1) / (ny - 1)
             At = np.transpose(A)
-            x = np.matmul(np.matmul(np.linalg.inv(np.matmul(At, A)), At), b)
+            x = np.matmul(np.matmul(np.linalg.inv(np.matmul(At, A)), At), b)[:, 0]  # 1-D, so x[i] is a scalar (numpy >= 2)
             self.corner_coordi = [
                 [Coordinate(x[0], x[1]), Coordinate(x[2], x[3])],
                 [Coordinate(x[4], x[5]), Coordinate(x[6], x[7])],
@@ -629,15 +702,39 @@ class SeismicVolume:
     def clean_data(self, shape=None):
         if shape is None:
             self.data[:, :, :] = 0.0
+            self.dp = np.zeros(self.shape[1:], dtype=np.float32)
         else:
             self.data = np.zeros(shape, dtype=np.float32)
             self.shape = shape
+            self.dp = np.zeros(self.shape[1:], dtype=np.float32)
+
+    def set_amp(self, amp=None):
+        self.amp = amp if amp is not None else np.max(np.abs(self.data))
+        self.data = self.data / self.amp
 
     def set_coordi(self, sscoordi=None, secoordi=None, escoordi=None, eecoordi=None):
         self.corner_coordi[0][0] = sscoordi if sscoordi is not None else self.corner_coordi[0][0]
         self.corner_coordi[0][1] = secoordi if secoordi is not None else self.corner_coordi[0][1]
         self.corner_coordi[1][0] = escoordi if escoordi is not None else self.corner_coordi[1][0]
         self.corner_coordi[1][1] = eecoordi if eecoordi is not None else self.corner_coordi[1][1]
+
+    def cut_zaxis(self, sz, ez):
+        rsz = max(sz, 0)
+        rez = min(ez, self.shape[0])
+
+        self.data = self.data[rsz: rez]
+        self.shape = self.data.shape
+
+    def idx_to_coordi(self, ix, iy):
+        x_portion = ix / (self.shape[1] - 1)
+        y_portion = iy / (self.shape[2] - 1)
+        out_coordi = (
+            self.corner_coordi[0][0] * (1.0 - x_portion) * (1.0 - y_portion) +
+            self.corner_coordi[0][1] * (1.0 - x_portion) * y_portion +
+            self.corner_coordi[1][0] * x_portion * (1.0 - y_portion) +
+            self.corner_coordi[1][1] * x_portion * y_portion
+        )
+        return out_coordi
 
     def coordi_to_idx(self, coordi):
         """Fractional grid indices (ix, iy) of coordi, inverting the bilinear corner mapping.
@@ -735,6 +832,69 @@ class SeismicVolume:
             ix = round(ix)
             iy = round(iy)
         return self.get_trace_idx(ix, iy)
+
+    def insert_trace_idx(self, new_trace, ix, iy):
+        """Stack new_trace at fractional (ix, iy), split bilinearly between the four neighbouring traces."""
+        assert len(new_trace) == self.shape[0]
+        if 0 <= ix <= self.shape[1] - 1 and 0 <= iy <= self.shape[2] - 1:
+            if abs(round(ix) - ix) < 0.01:
+                if abs(round(iy) - iy) < 0.01:
+                    trace = self.data[:, int(round(ix)), int(round(iy))]
+                    weight = self.dp[int(round(ix)), int(round(iy))]
+                    self.data[:, int(round(ix)), int(round(iy))] = add_weighted_avg(trace, weight, new_trace, 1.0)
+                    self.dp[int(round(ix)), int(round(iy))] += 1.0
+                else:
+                    portion = iy - np.floor(iy)
+
+                    pre_trace = self.data[:, int(round(ix)), int(np.floor(iy))]
+                    pre_weight = self.dp[int(round(ix)), int(np.floor(iy))]
+                    self.data[:, int(round(ix)), int(np.floor(iy))] = add_weighted_avg(pre_trace, pre_weight, new_trace, 1.0 - portion)
+                    self.dp[int(round(ix)), int(np.floor(iy))] += 1.0 - portion
+
+                    pro_trace = self.data[:, int(round(ix)), int(np.ceil(iy))]
+                    pro_weight = self.dp[int(round(ix)), int(np.ceil(iy))]
+                    self.data[:, int(round(ix)), int(np.ceil(iy))] = add_weighted_avg(pro_trace, pro_weight, new_trace, portion)
+                    self.dp[int(round(ix)), int(np.ceil(iy))] += portion
+            else:
+                if abs(round(iy) - iy) < 0.01:
+                    portion = ix - np.floor(ix)
+
+                    pre_trace = self.data[:, int(np.floor(ix)), int(round(iy))]
+                    pre_weight = self.dp[int(np.floor(ix)), int(round(iy))]
+                    self.data[:, int(np.floor(ix)), int(round(iy))] = add_weighted_avg(pre_trace, pre_weight, new_trace, 1.0 - portion)
+                    self.dp[int(np.floor(ix)), int(round(iy))] += 1.0 - portion
+
+                    pro_trace = self.data[:, int(np.ceil(ix)), int(round(iy))]
+                    pro_weight = self.dp[int(np.ceil(ix)), int(round(iy))]
+                    self.data[:, int(np.ceil(ix)), int(round(iy))] = add_weighted_avg(pro_trace, pro_weight, new_trace, portion)
+                    self.dp[int(np.ceil(ix)), int(round(iy))] += portion
+                else:
+                    x_portion = ix - np.floor(ix)
+                    y_portion = iy - np.floor(iy)
+
+                    prepre_trace = self.data[:, int(np.floor(ix)), int(np.floor(iy))]
+                    prepre_weight = self.dp[int(np.floor(ix)), int(np.floor(iy))]
+                    self.data[:, int(np.floor(ix)), int(np.floor(iy))] = add_weighted_avg(prepre_trace, prepre_weight, new_trace, (1.0 - x_portion) * (1.0 - y_portion))
+                    self.dp[int(np.floor(ix)), int(np.floor(iy))] += (1.0 - x_portion) * (1.0 - y_portion)
+
+                    prepro_trace = self.data[:, int(np.floor(ix)), int(np.ceil(iy))]
+                    prepro_weight = self.dp[int(np.floor(ix)), int(np.ceil(iy))]
+                    self.data[:, int(np.floor(ix)), int(np.ceil(iy))] = add_weighted_avg(prepro_trace, prepro_weight, new_trace, (1.0 - x_portion) * y_portion)
+                    self.dp[int(np.floor(ix)), int(np.ceil(iy))] += (1.0 - x_portion) * y_portion
+
+                    propre_trace = self.data[:, int(np.ceil(ix)), int(np.floor(iy))]
+                    propre_weight = self.dp[int(np.ceil(ix)), int(np.floor(iy))]
+                    self.data[:, int(np.ceil(ix)), int(np.floor(iy))] = add_weighted_avg(propre_trace, propre_weight, new_trace, x_portion * (1.0 - y_portion))
+                    self.dp[int(np.ceil(ix)), int(np.floor(iy))] += x_portion * (1.0 - y_portion)
+
+                    propro_trace = self.data[:, int(np.ceil(ix)), int(np.ceil(iy))]
+                    propro_weight = self.dp[int(np.ceil(ix)), int(np.ceil(iy))]
+                    self.data[:, int(np.ceil(ix)), int(np.ceil(iy))] = add_weighted_avg(propro_trace, propro_weight, new_trace, x_portion * y_portion)
+                    self.dp[int(np.ceil(ix)), int(np.ceil(iy))] += x_portion * y_portion
+
+    def insert_trace_coordi(self, new_trace, coordi):
+        ix, iy = self.coordi_to_idx(coordi)
+        self.insert_trace_idx(new_trace, ix, iy)
 
     def get_line(self, line, mode="bilinear"):
         """Fill a SeismicLine by sampling this volume at each of its trace coordinates."""
