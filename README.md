@@ -46,8 +46,10 @@ Install PyTorch for your CUDA version (https://pytorch.org/get-started/locally/)
 pip install -r requirements.txt
 ```
 
-Tested with Python 3.11 and torch 2.11 (CUDA 12.6). Training uses `torch.distributed` (NCCL) even on
-a single GPU.
+Checkpoint loading and imports were verified with Python 3.11 and torch 2.11.0+cu126 (Windows);
+the released models were trained on a Linux server with 4 GPUs. Training requires CUDA GPUs and
+always initializes a `torch.distributed` NCCL process group, even on a single GPU, so it does not
+run on Windows or with `DEVICE: "cpu"`.
 
 ## Data and trained models
 
@@ -70,6 +72,7 @@ checkpoint/
   lithofacies_prediction_7.5_pat_047
   lithofacies_prediction_12.5_pat_049
   lithofacies_prediction_25.0_pat_044
+  lithofacies_prediction_{7.5,12.5,25.0}_pat_050   epoch-50 checkpoints (loss histories)
 ```
 
 | Trace spacing (TDT) | Checkpoint | Epoch |
@@ -78,11 +81,15 @@ checkpoint/
 | 12.5 m | `lithofacies_prediction_12.5_pat_049` | 49 |
 | 25.0 m | `lithofacies_prediction_25.0_pat_044` | 44 |
 
-Each epoch is the one with the lowest validation loss over 50 epochs of training.
+Each epoch is the one with the lowest validation loss over 50 epochs of training. The epoch-50
+checkpoints are only needed by `test/test_lithofacies.py` and `test/test_lithofacies_quality.py`,
+which read the loss history from them.
 
-Facies classes: 0 unlabeled, 1 unclassified (outside the interpreted interval), 2 basement,
-3 igneous, 4 shale, 5 sand. Classes 0 and 1 are excluded from the loss and from all reported
-metrics.
+Facies classes: 0 unlabeled, 1 unclassified region above the interpreted interval, 2 basement,
+3 igneous, 4 shale, 5 sand. Class 0 is ignored by the loss. Class 1 has zero cross-entropy weight
+and is left out of the Dice average, but its pixels still enter the training label-smoothing term
+and act as negatives in the Dice terms of classes 2-5. Classes 0 and 1 are excluded from all
+reported metrics.
 
 Real 2D lines are rescaled to an RMS amplitude of 0.15 before inference, matching the training
 volume.
@@ -115,7 +122,15 @@ epoch, ...) instead.
    ```bash
    python -m test.evaluate_depth_accuracy
    ```
-   Figures are written under `test/validation_figures/`.
+   `test_lithofacies_quantity` and `evaluate_accuracy` print their results;
+   `evaluate_depth_accuracy` writes `test/validation_figures/tdt_25.0/depth_accuracy.png`.
+4. Example figures (written to `test/validation_figures/tdt_25.0/`):
+   ```bash
+   python -m test.create_validation_figures
+   ```
+   ```bash
+   python -m test.create_annotated_figure
+   ```
 
 ## Citation
 

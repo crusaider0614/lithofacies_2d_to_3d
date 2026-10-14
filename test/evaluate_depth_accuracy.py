@@ -3,15 +3,18 @@
 Uses the same sampling and inference as evaluate_accuracy.py (TDT = 25.0 m model
 checkpoint/lithofacies_prediction_25.0_pat_044; ``n_samples`` random synthetic 2D lines
 from the validation part of the 3D volume, each cropped to 768 x 512 and predicted with
-overlapping 256 x 256 tiles), but accumulates the fraction of correctly predicted labeled
-pixels separately for each depth row of the crop, overall and per class (2-5).
+overlapping 256 x 256 tiles), but accumulates the fraction of correctly predicted pixels
+whose ground truth is class 2-5 separately for each depth row of the crop, overall and per
+class (per-class values are recall: correct pixels of class c / ground-truth pixels of c).
 
 Output figure (two panels, curves smoothed with a 21-sample moving average):
   (a) overall accuracy vs. two-way time, with a shaded "target zone" (1.5-2.3 s) and
-      "basement boundary" zone (2.4-2.9 s) and the mean accuracy in each;
-  (b) Shale and Sand accuracy vs. two-way time.
-Two-way time assumes the 768-sample crop spans 1-3 s (same axis convention as the
-validation figures). A zone summary is also printed.
+      "basement boundary" zone (2.4-2.9 s) and, per zone, the mean of the smoothed per-row
+      accuracy curve (rows weighted equally, not pixel-pooled);
+  (b) Shale and Sand recall vs. two-way time.
+Two-way time is a fixed relabelling of the crop row (row 0 -> 1 s, 2.0 s / 768 per row, as in
+the validation figures). Crops start at random depths, so it is not the true TWT of the
+pixels. Rows without scored pixels are 0 % in the curves. A zone summary is also printed.
 
 Reads:  config/config_lithofacies.yaml, checkpoint/lithofacies_prediction_25.0_pat_044,
         data/<DATA_POOL>/<VOLUME_TAG>.npy, <FACIES_TAG>.npy,
@@ -110,8 +113,9 @@ with torch.no_grad():
         if (idx + 1) % 20 == 0:
             print('  Processing', idx + 1, '/', n_samples, '...')
         
-        # Random line + random 768-sample depth window, retried until the window contains
-        # labels; facies and inst. attributes reuse the same line coordinates.
+        # Random line + random 768-sample depth window, retried until the window has at
+        # least one non-zero label (class 1 counts, so it may contain no scored pixels);
+        # facies and inst. attributes reuse the same line coordinates.
         while True:
             vt, scoordi, ecoordi = extract_random_line(volume_sv, nt, vdt, tdt, mode='bilinear')
             ft, _, _ = extract_random_line(facies_sv, nt, vdt, tdt, scoordi=scoordi, ecoordi=ecoordi, mode='nearest')
@@ -179,7 +183,11 @@ twt = t_start + np.arange(crop_size[0]) * dt_sec
 # Smooth curves
 window = 21
 def smooth(arr):
-    """Centred moving average over ``window`` samples (zero-padded at the ends)."""
+    """Centred moving average over ``window`` samples.
+
+    np.convolve 'same' treats values beyond both ends as zero, so the first/last window // 2
+    rows are biased low; rows with no scored pixels also enter as 0 %.
+    """
     return np.convolve(arr, np.ones(window)/window, mode='same')
 
 depth_accuracy_smooth = smooth(depth_accuracy)
@@ -200,21 +208,23 @@ ax1.fill_betweenx(twt, depth_accuracy_smooth, 0, alpha=0.2, color='blue')
 ax1.axvline(x=80, color='green', linestyle='--', linewidth=1.5, alpha=0.7)
 ax1.axvline(x=90, color='orange', linestyle='--', linewidth=1.5, alpha=0.7)
 
-# Target zone (sedimentary section - middle)
+# "Target zone" display band 1.5-2.3 s (crop rows 192-499); crops start at random depths, so
+# this is a band of crop rows, not a fixed geological interval.
 target_top = 1.5
 target_bottom = 2.3
 ax1.axhspan(target_top, target_bottom, alpha=0.12, color='green')
 ax1.text(5, (target_top + target_bottom) / 2, 'Target\nzone', fontsize=10, 
          fontweight='bold', va='center', color='darkgreen')
 
-# Boundary zone (basement boundary - bottom)
+# "Basement boundary" display band 2.4-2.9 s (crop rows 538-729), likewise a band of crop rows.
 boundary_top = 2.4
 boundary_bottom = 2.9
 ax1.axhspan(boundary_top, boundary_bottom, alpha=0.12, color='red')
 ax1.text(5, (boundary_top + boundary_bottom) / 2, 'Basement\nboundary', fontsize=10, 
          fontweight='bold', va='center', color='darkred')
 
-# Calculate zone accuracies
+# Zone accuracies: mean of the smoothed per-row curve over zone rows with scored pixels
+# (not pixel-weighted).
 target_mask = (twt >= target_top) & (twt <= target_bottom) & valid_depths
 boundary_mask = (twt >= boundary_top) & (twt <= boundary_bottom) & valid_depths
 
@@ -249,7 +259,9 @@ ax1_depth.set_yticklabels([str(int(round((t - t_start) / dt_sec))) for t in dept
 ax2 = axes[1]
 colors = {2: 'blue', 3: 'red', 4: 'orange', 5: 'gold'}
 for c in [4, 5]:  # Only Shale and Sand (main classes)
-    valid = depth_class_total[c] > 100  # Need enough samples
+    # Plot the class only if some row has > 100 of its pixels; the whole curve is drawn,
+    # including sparse rows (rows without the class count as 0 %).
+    valid = depth_class_total[c] > 100
     if np.any(valid):
         ax2.plot(depth_class_accuracy[c], twt, color=colors[c], linewidth=2, 
                 label=class_names[c])

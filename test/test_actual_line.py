@@ -5,7 +5,8 @@ line listed in ``idx_range``:
   1. load the line (<n>.npy amplitude + <n>.nphead header with trace coordinates; see
      module.seismic_data.SeismicLine), keep at most the first 1001 samples and the trace
      range given in ``idx_range`` (reflect-padding to 256 traces if the line is narrower);
-  2. compute the line's trace spacing from its end coordinates and pick the model whose
+  2. compute the line's mean trace spacing from the straight-line fit of its trace
+     coordinates (whole line, before trimming) and pick the model whose
      training trace spacing TDT (7.5 / 12.5 / 25.0 m) is nearest to it;
   3. rescale the section to RMS 0.15 and compute the 2-channel info input from it
      (sin of the unwrapped Hilbert phase, and instantaneous frequency clipped at its 99th
@@ -29,7 +30,6 @@ There is no CLI. Edit the module-level settings (``device``, checkpoint tags/epo
 ``idx_range``).
 """
 import os
-import random
 import numpy as np
 import torch
 import yacs.config
@@ -39,8 +39,6 @@ from module.seismic_data import SeismicLine, distance
 from network.coordi_network import get_gen_model
 from utils.data import show_2d_array
 from utils.project import get_project_root
-from obspy.io.segy.segy import SEGYFile, SEGYTraceHeader, SEGYBinaryFileHeader
-from obspy.core import Trace, Stream
 
 
 def add_weighted_avg(average, weight, new_sample, new_weight):
@@ -48,23 +46,6 @@ def add_weighted_avg(average, weight, new_sample, new_weight):
     running weighted average ``average`` with accumulated weight ``weight``."""
     new_average = (weight[None] * average + new_weight[None] * new_sample) / (weight[None] + new_weight[None])
     return new_average, weight + new_weight
-
-
-def read_trace_coordinates(file_path):
-    """Read per-trace (x, y) coordinates from a .nphead file.
-
-    Skips the 5 header lines; each following line is "<trace_idx> <x> <y>".
-    Returns an (n_traces, 2) array.
-    """
-    coords = []
-    with open(file_path, 'r') as f:
-        lines = f.readlines()
-        for line in lines[5:]:
-            parts = line.split()
-            x = float(parts[1])
-            y = float(parts[2])
-            coords.append((x, y))
-    return np.array(coords)
 
 
 # Tile size (= training crop size) and the 2D raised-cosine blending window for overlap-add
@@ -188,18 +169,10 @@ idx_range = {
     190: (0, 1560),
 }
 
-# idxs = np.array(idxs) - 1
-# idxs = list(range(192))
-# random.shuffle(idxs)
 for idx in idx_range.keys():
-    # print(idx)
-
     line = SeismicLine(data_pool="ssealine_matched", tag=str(idx + 1))
     # Mean trace spacing of the line (m), from its fitted start/end coordinates.
     ldt = distance(line.scoordi, line.ecoordi) / (line.shape[1] - 1)
-
-    nphead_path = os.path.join(get_project_root(), "data", "ssealine_matched", str(idx + 1) + ".nphead")
-    coordinate = read_trace_coordinates(nphead_path)
 
     # Choose the training trace spacing nearest to the line's own spacing.
     tdt = min([7.5, 12.5, 25.0], key=lambda x: abs(ldt - x))
@@ -208,10 +181,6 @@ for idx in idx_range.keys():
         vt = line.data
     else:
         vt = line.data[:1001]
-    vto = vt.copy()
-    # szp = 0
-    # ezp = 1001 - szp - 768
-    # vt = vt[szp: szp + 768]
 
     isx = idx_range[idx][0]
     iex = idx_range[idx][1] if idx_range[idx][1] > 0 else vt.shape[1]
@@ -272,7 +241,7 @@ for idx in idx_range.keys():
 
     info = np.concatenate((inst_phase[None], inst_freq[None]), axis=0)
 
-    # Overlap-add tiling (~50 % overlap) over depth and along the line; tile logits are
+    # Overlap-add tiling (at least 50 % overlap) over depth and along the line; tile logits are
     # blended with the raised-cosine ``weight`` window.
     nsz = int((nz - target_dim) / (target_dim // 2)) + 2 if nz > target_dim else 1
     nst = int((nt - target_dim) / (target_dim // 2)) + 2 if nt > target_dim else 1
@@ -280,13 +249,10 @@ for idx in idx_range.keys():
     with torch.no_grad():
         for isz in range(nsz):
             sz = int(round((nz - target_dim) * isz / (nsz - 1))) if nsz > 1 else 0
-        # for isz in range(2):
-        #     sz = 0 if isz == 0 else 256
             ez = sz + target_dim
             for ist in range(nst):
                 st = int(round((nt - target_dim) * ist / (nst - 1))) if nst > 1 else 0
                 et = st + target_dim
-                # print(sz, ez, st, et)
 
                 vt_crop = vt[sz: ez, st: et]
                 vt_crop = torch.tensor(vt_crop[None, None], dtype=torch.float32, device=device)
@@ -303,20 +269,10 @@ for idx in idx_range.keys():
                     fo_crop,
                     weight
                 )
-            # show_2d_array(dp, vmin=-dp.max(), vmax=dp.max())
 
-        # fo[1] -= 1
-        # fo[2] -= 1
-        # fo[3] -= 1
         fo = np.argmax(fo, axis=0).astype(np.int32)
         foo = fo.copy()
-        # foo = np.pad(foo, ((szp, 0), (0, 0)), constant_values=1)
-        # foo = np.pad(foo, ((0, ezp), (0, 0)), constant_values=2)
-        #
-        # print(idx, vto.shape, foo.shape, szp, ezp)
 
-
-        # if idx in [133, 150]:
         # Display: class map rescaled to [-1, 1] (foo * 2 / 5 - 1) stacked above the amplitude.
         hb = np.zeros((foo.shape[0], 4))
         imgs1 = np.concatenate((
@@ -331,13 +287,10 @@ for idx in idx_range.keys():
         ), axis=0)
         show_2d_array(imgs, scale=200, cmap="seismic", vmax=1.0, vmin=-1.0)
 
-        # vto = vto / (vto * vto).mean() ** 0.5 * 0.15
-        # hb = np.ones((vto.shape[0], 4))
-        # imgs = np.concatenate((
-        #     hb, vto, hb,
-        # ), axis=1)
-        # show_2d_array(imgs, scale=200)
-
+        # Optional SEG-Y export of the predicted classes (needs obspy); uncomment to use.
+        # from obspy.core import Trace, Stream
+        # from obspy.io.segy.segy import SEGYTraceHeader
+        #
         # if is_pad:
         #     foo = foo[:, lp: -rp]
         #

@@ -1,8 +1,9 @@
 """Lithofacies segmentation network (InfoUNet) and its Dice loss.
 
 InfoUNet maps a 2D seismic amplitude section (1 channel) plus auxiliary "info" channels
-(instantaneous phase and frequency, see process/compute_inst_attribute.py) to per-pixel logits over
-the 6 facies classes. Layout: residual U-Net encoder (4 stages), a Feature Pyramid
+(sin of the unwrapped instantaneous phase and scaled instantaneous frequency, see
+process/compute_inst_attribute.py) to per-pixel logits over 6 classes (0 unlabeled,
+1 unclassified region above the interpreted interval, 2 basement, 3 igneous, 4 shale, 5 sand). Layout: residual U-Net encoder (4 stages), a Feature Pyramid
 Attention bottleneck, and decoder blocks that use horizontal (row-wise) self-attention.
 """
 import os
@@ -319,10 +320,11 @@ class InfoUNet(nn.Module):
 
 
 class DiceLoss(nn.Module):
-    """Soft multi-class Dice loss, 1 - mean Dice over the classes kept.
+    """Soft multi-class Dice loss: 1 - mean over the kept classes of Dice pooled over the batch.
 
-    Pixels whose target is `ignore_index` are masked out; classes in `ignore_classes` (and
-    `ignore_index` itself) are excluded from the mean.
+    Pixels whose target is `ignore_index` are masked out. Classes in `ignore_classes` (and
+    `ignore_index` itself) only drop out of the class mean; their pixels stay in the mask, so
+    probability a kept class puts on them counts as a false positive for that class.
     """
 
     def __init__(self, ignore_index=0, ignore_classes=None, smooth=1.0):
@@ -354,7 +356,13 @@ class DiceLoss(nn.Module):
 
 
 def get_gen_model(cfg, additional_channel=0):
-    """Build InfoUNet from config MODEL.*; loads MODEL.PRETRAINED weights if that file exists."""
+    """Build InfoUNet from config MODEL.* (input channels = A_CHANNELS + additional_channel).
+
+    If MODEL.PRETRAINED is set and names an existing file (path used as given), it is loaded
+    as a bare state_dict ("module." prefixes stripped, strict). Training checkpoints such as
+    checkpoint/lithofacies_prediction_* hold a full training state; load those through
+    state["network"] as the test scripts do.
+    """
     model = InfoUNet(
         cfg.MODEL.A_CHANNELS + additional_channel,
         cfg.MODEL.INFO_CHANNELS,

@@ -3,33 +3,38 @@
 For each (tdt, tag, epoch) in ``tdt_configs`` (by default only TDT = 25.0 m,
 checkpoint/lithofacies_prediction_25.0_pat_044, the minimum-validation-loss epoch), draws
 ``n_samples`` random synthetic 2D lines from the validation part of the 3D volume
-(CF.DATASET.VALID_IDX), crops each to 768 samples x 512 traces at a random labeled depth,
-predicts it with overlapping 256 x 256 tiles, and saves a 3-panel paper-style figure:
-(a) seismic amplitude, (b) labeled lithofacies with an optional map inset showing the line
-location, (c) prediction. Predictions are blanked where the label is 0 (unlabeled).
+(CF.DATASET.VALID_IDX), crops each to 768 samples x 512 traces at a random depth whose
+window has at least one non-zero label, predicts it with overlapping 256 x 256 tiles, and
+saves a 3-panel paper-style figure: (a) seismic amplitude, (b) labeled lithofacies with an
+optional map inset showing the line location, (c) prediction. Predictions are blanked (set
+to 0, gray) where the label is 0. They are not blanked where the label is 1, so that region
+is black in (b) (class 1 has no colour) but shows the predicted facies in (c).
 
 This module also provides the shared helpers imported by evaluate_accuracy.py,
 evaluate_depth_accuracy.py and create_annotated_figure.py: ``predict_section``,
-``extract_random_line``, ``facies_to_rgb`` (and ``add_weighted_avg``,
-``get_random_boundary_idx``). Importing it has no side effects other than matplotlib
-rcParams; ``main()`` only runs when executed as a script.
+``extract_random_line`` and ``facies_to_rgb`` (``add_weighted_avg`` and
+``get_random_boundary_idx`` are internal helpers they use). Importing it has no side
+effects other than matplotlib rcParams; ``main()`` only runs when executed as a script.
 
 Reads:  config/config_lithofacies.yaml, the checkpoint(s) in ``tdt_configs``,
         data/<DATA_POOL>/<VOLUME_TAG>.npy, <FACIES_TAG>.npy,
         <VOLUME_TAG>_inst_phase.npy, <VOLUME_TAG>_inst_freq.npy, and optionally
-        test/validation_figures/tdt_<TDT>/devided_volume.png (map image for the inset; the
-        inset is skipped if the file is missing; it is not produced by this repo).
+        test/validation_figures/tdt_<TDT>/devided_volume.png (map image of the validation
+        sub-volume for the inset, width = x / nx, height = y / ny; the inset is skipped if
+        the file is missing; it is not produced by this repo).
 Writes: test/validation_figures/tdt_<TDT>/validation_sample_<NNN>.png and
         test/validation_figures/tdt_<TDT>/line_coordinates.txt (start/end grid coordinates
-        of every sampled line).
+        of every sampled line within the validation sub-volume; add VALID_IDX[0] to X for
+        full-volume indices).
 
 Run from the repo root (running by file path fails because the repo root is then not on
 sys.path):
 
     python -m test.create_validation_figures
 
-There is no CLI. Edit the settings at the top of ``main()`` (``target_dim``, ``crop_size``,
-``n_samples``, ``device``, ``tdt_configs``). No random seed is set, so each run draws
+There is no CLI. Edit the settings in ``main()`` (``target_dim``, ``crop_size``,
+``n_samples`` and ``device`` at the top; ``tdt_configs`` just before the per-TDT loop).
+No random seed is set, so each run draws
 different lines.
 """
 import os
@@ -39,7 +44,6 @@ import torch
 import yacs.config
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
-from matplotlib.colors import ListedColormap
 from PIL import Image
 
 from module.seismic_data import SeismicVolume, Coordinate, distance
@@ -64,27 +68,23 @@ def add_weighted_avg(average, weight, new_sample, new_weight):
     return new_average, weight + new_weight
 
 
-# Lithofacies color mapping (based on 3dn_facies_unc labels)
-# Labels: 0 (unclassified), 2 (Basement), 3 (Igneous), 4 (Shale), 5 (Sand)
+# Colours for the 3dn_facies_unc classes. 0 (unlabeled) is gray and labelled "Unclassified" in
+# the legend, as in the paper's figures. Class 1 (unclassified region above the interpreted
+# interval) has no colour, so it is drawn black, with no legend entry.
 LITHO_COLORS = {
-    0: '#9c9c9c',   # Unclassified (gray)
+    0: '#9c9c9c',   # Unlabeled (gray; legend "Unclassified")
     2: '#0000FF',   # Basement (blue)
     3: '#FF0000',   # Igneous (red)
     4: '#FFA500',   # Shale (orange)
     5: '#FFFF00',   # Sand (yellow)
 }
 
-LITHO_NAMES = {
-    0: 'Unclassified',
-    2: 'Basement',
-    3: 'Igneous',
-    4: 'Shale',
-    5: 'Sand',
-}
-
 
 def facies_to_rgb(facies_array):
-    """Convert facies class indices to RGB image"""
+    """Convert an (H, W) facies class map to an (H, W, 3) uint8 RGB image using LITHO_COLORS.
+
+    Classes without a colour (class 1) stay black.
+    """
     h, w = facies_array.shape
     rgb = np.zeros((h, w, 3), dtype=np.uint8)
 
@@ -104,7 +104,8 @@ def predict_section(network, vt, info, device, target_dim=256):
 
     ``vt`` is a (1, 1, nz, nt) amplitude tensor and ``info`` a (1, 2, nz, nt) tensor of
     instantaneous phase/frequency, both already on ``device``. The section is covered by
-    target_dim x target_dim tiles (the training crop size) overlapping by about 50 %; each
+    target_dim x target_dim tiles (the training crop size) overlapping by at least 50 % (6 x 4
+    tiles for a 768 x 512 crop, about 60 % / 67 % overlap); each
     tile's 6-class logits are weighted by a 2D raised-cosine window (~1 at the centre, ~0 at
     the edges) and averaged, which removes seams at tile borders. Returns the (nz, nt) int32
     argmax class map. Assumes nz, nt >= target_dim.
@@ -177,7 +178,8 @@ def extract_random_line(volume_data, nt, vdt, tdt, scoordi=None, ecoordi=None, m
 
     Builds a synthetic 2D line of ``nt`` traces from the SeismicVolume ``volume_data``
     (3D trace spacing ``vdt``) whose nominal trace spacing is ``tdt``. A straight line is
-    drawn between random points on two different edges of the survey; a segment of length
+    drawn between random points on two different edges of the volume grid (in this repo, the
+    validation sub-volume); a segment of length
     (0.9-1.1) x (nt - 1) x tdt is cut from it at a random offset and resampled to ``nt``
     traces, so the actual trace spacing jitters by +/-10 % around ``tdt``.
 
@@ -218,7 +220,7 @@ def create_validation_figure(seismic, ground_truth, prediction, output_path,
                              scoordi=None, ecoordi=None, volume_img_path=None,
                              nx_volume=667, ny_volume=1200, tdt=25.0):
     """
-    Create paper-style validation figure with 3 panels (Julia style):
+    Create paper-style validation figure with 3 panels:
     (a) Seismic data
     (b) Labeled lithofacies (Ground truth) with volume location inset
     (c) Prediction with legend
@@ -226,7 +228,9 @@ def create_validation_figure(seismic, ground_truth, prediction, output_path,
     ``seismic``, ``ground_truth`` and ``prediction`` are (nz, nt) arrays. The inset in (b)
     is drawn only if ``scoordi``/``ecoordi`` are given and ``volume_img_path`` exists; the
     line is drawn by scaling grid coordinates by the image size / (nx_volume, ny_volume).
-    The x axis is labeled in km using ``tdt``; the y axis assumes the panel spans 1-3 s TWT.
+    The x axis is a nominal distance in km (img_width * tdt; the actual spacing varies by
+    +/-10 % around tdt). The y axis is always labelled 1-3 s TWT, whatever depth the crop came
+    from.
     The figure is saved to ``output_path``.
     """
     img_height, img_width = seismic.shape
@@ -242,14 +246,15 @@ def create_validation_figure(seismic, ground_truth, prediction, output_path,
     plt.subplots_adjust(wspace=0.08, left=0.08, right=0.98, bottom=0.08, top=0.94)
 
     # Calculate axis labels
-    # X-axis: distance in km (TDT=25m per trace)
+    # X-axis: nominal distance in km (tdt per trace)
     distance_km = img_width * tdt / 1000.0  # convert to km
     x_ticks = [0, img_width/2, img_width]
     x_labels = ["0", f"{distance_km/2:.1f}", f"{distance_km:.1f}"]
 
     # Y-axis: two-way time in seconds
-    # 768 samples = 2 seconds (1s to 3s range), dt = 2.6ms
-    # Time increases downward: top=1s, bottom=3s
+    # Fixed display convention: the panel is labelled 1-3 s (2.0 s / 768 = ~2.6 ms per sample),
+    # time increasing downward. It ignores the random crop start in main() and the data's own
+    # sample interval.
     dt_sec = 2.0 / img_height  # 2 seconds for full height
     t_start = 1.0  # starting time in seconds
     t_end = t_start + img_height * dt_sec  # ending time
@@ -304,7 +309,7 @@ def create_validation_figure(seismic, ground_truth, prediction, output_path,
     for spine in ax2.spines.values():
         spine.set_linewidth(spine_width)
 
-    # Add volume location inset (like Julia code)
+    # Add volume location inset
     if scoordi is not None and ecoordi is not None and volume_img_path is not None:
         if os.path.isfile(volume_img_path):
             volume_img = np.array(Image.open(volume_img_path))
@@ -348,7 +353,7 @@ def create_validation_figure(seismic, ground_truth, prediction, output_path,
     for spine in ax3.spines.values():
         spine.set_linewidth(spine_width)
 
-    # Legend (top-right, like Julia code)
+    # Legend (top-right)
     legend_elements = [
         Patch(facecolor='#9c9c9c', edgecolor='black', label='Unclassified'),
         Patch(facecolor='#0000FF', edgecolor='black', label='Basement'),
@@ -469,7 +474,6 @@ def main():
                     ft = np.round(ft).astype(np.int32)
 
                     # Crop in z direction
-                    mz = nz // 50
                     sz = random.randint(0, nz - crop_size[0])
                     sz = np.clip(sz, 0, nz - crop_size[0])
                     ez = sz + crop_size[0]
@@ -498,7 +502,7 @@ def main():
                 # Predict
                 fo = predict_section(network, vt_tensor, info_tensor, device, target_dim)
 
-                # Apply mask: where ground truth is 0 (unclassified), prediction should also be 0
+                # Blank predictions where the ground truth is 0 (unlabeled); class-1 pixels are not blanked
                 fo[ft == 0] = 0
 
                 # Log coordinates

@@ -4,7 +4,8 @@ Not used for any paper table or figure; it is an interactive debugging aid.
 
 What it does:
   1. Loads the epoch-``epoch`` (default 50, the last epoch) checkpoint of ``tag`` only to
-     read the stored train/valid loss history, prints and plots it, and then reloads the
+     read the stored train/valid loss history, prints the best epoch and its validation
+     loss, plots both loss curves, and then reloads the
      checkpoint of the epoch with minimum validation loss.
   2. Draws random synthetic 2D lines from the validation part of the 3D volume via
      ``LithofaciesDataset`` (crop 768 x 512 samples, trace spacing CF.DATASET.TDT,
@@ -48,11 +49,7 @@ config_file = os.path.join(get_project_root(), "config", "config_lithofacies.yam
 with open(config_file, "rt") as f_read:
     CF = yacs.config.load_cfg(f_read)
 device = torch.device("cuda:0")
-tag = CF.TAG
-# tag = "lithofacies_prediction_7.5_pat"
-# tag = "lithofacies_prediction_12.5_pat"
-tag = "lithofacies_prediction_25.0_pat"
-# tag = "lithofacies_prediction_25.0_nnorm"
+tag = "lithofacies_prediction_25.0_pat"  # or ..._7.5_pat / ..._12.5_pat
 print("Tag:", tag)
 
 # The last-epoch checkpoint stores the per-epoch loss history; argmin(valid_loss) + 1 is the
@@ -98,26 +95,13 @@ with torch.no_grad():
         ft = ft.to(device)
         info = info.to(device)
 
-        # ft[ft == 1] = 0
-        # ft[ft == 2] = 0
-
         fo = network(vt, info)
         fo = torch.argmax(fo, dim=1)
-
-        iz = 200
-        ix = 32
-        iy = 32
 
         vt = vt[0].cpu().numpy().squeeze()
         ft = ft[0].cpu().numpy().squeeze()
         fo = fo[0].cpu().numpy().squeeze()
-        # fo[ft == 0] = 0
         hb = -np.ones((vt.shape[0], 4))
-
-        # imgs = np.concatenate((
-        #     hb, vt, hb,
-        # ), axis=1)
-        # show_2d_array(imgs, scale=100)
 
         # Panels on a shared 0..5 gray scale: amplitude (scaled/shifted for display),
         # ground-truth classes, predicted classes, and the misclassification mask.

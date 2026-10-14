@@ -45,9 +45,11 @@ def extract_random_line(volume_data, nt, vdt, tdt, scoordi=None, ecoordi=None, m
     vdt is the volume's trace spacing and tdt the target 2D trace spacing (same units, metres).
     Without endpoints, a line is drawn between two random points on different edges of the
     volume until it is long enough, then a random sub-segment of length (nt - 1) * tdt
-    (jittered by +/-10%) is kept. Passing scoordi/ecoordi reuses those exact endpoints, which
-    is how the matching facies/attribute lines are extracted. Returns (line data of shape
-    (nz, nt), start Coordinate, end Coordinate) in grid-index coordinates.
+    (jittered by +/-10%) is kept. Passing both scoordi and ecoordi reuses them exactly (no
+    cropping or jitter), which is how the matching facies/attribute lines are extracted;
+    passing only one of them is not supported. volume_data must have its corner_coordi set to
+    its grid corners. Returns (line data of shape (nz, nt), start Coordinate, end Coordinate)
+    in grid-index coordinates.
     """
     target_distance = (nt - 1) * tdt
     crop_distance = (0.9 + 0.2 * random.random()) * target_distance
@@ -88,8 +90,10 @@ class LithofaciesDataset(Dataset):
         (normalized depth coordinate, <volume_tag>_inst_phase.npy, <volume_tag>_inst_freq.npy).
       is_flip / is_scale / noise: augmentation (left-right flip, amplitude x U(0.8, 1.2),
         additive Gaussian noise with this std), applied to the amplitude only except flip.
-    Returns amplitude (1, H, W) float32, facies (H, W) int64 and info (C, H, W), omitting
-    facies or info when not configured.
+    Returns amplitude (1, H, W) float32, facies (H, W) int64 and info (C, H, W); info is
+    omitted when no info channel is enabled. facies_tag, target_idx and crop_size are
+    required: the line is redrawn until its facies contain a non-zero label, so without
+    facies __getitem__ never returns.
     """
 
     def __init__(
@@ -201,7 +205,8 @@ class LithofaciesDataset(Dataset):
             is_withfacies = False
         nz, nx, ny = self.volume_data.shape
 
-        # Redraw the line until it crosses at least one labeled facies sample.
+        # Redraw the line until it contains at least one non-zero label (classes 1-5; class 1
+        # counts here although it has zero cross-entropy weight).
         while True:
             vc_datum, scoordi, ecoordi = extract_random_line(
                 self.volume_class,

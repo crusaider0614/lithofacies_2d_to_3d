@@ -5,8 +5,9 @@ volume at TDT = 25.0 m, takes its top 768 samples x 512 traces, predicts it with
 TDT = 25.0 m model (checkpoint/lithofacies_prediction_25.0_pat_044) using overlapping
 256 x 256 tiles, and saves a 3-panel figure in the style of create_validation_figures.py:
 (a) seismic with a "target depth range" bracket and "Fault" / "Chaotic basement" labels,
-(b) ground truth with an optional map inset of the line location, (c) prediction with
-the two largest misclassified regions circled in (b) and (c).
+(b) ground truth with an optional map inset of the line location, (c) prediction, with the
+two largest regions where label and prediction disagree (both non-zero; class 1 included)
+circled in (b) and (c).
 
 Note: the annotation positions in panel (a) are fixed fractions of the panel size, not
 detected features; they were placed for the specific line drawn with seed 123.
@@ -30,7 +31,7 @@ import numpy as np
 import torch
 import yacs.config
 import matplotlib.pyplot as plt
-from matplotlib.patches import Patch, FancyBboxPatch, Rectangle
+from matplotlib.patches import Patch, FancyBboxPatch
 from PIL import Image
 
 from module.seismic_data import SeismicVolume, Coordinate
@@ -48,9 +49,11 @@ def create_annotated_figure(seismic, ground_truth, prediction, output_path,
     """Save a 3-panel (seismic / ground truth / prediction) figure with annotations.
 
     Arguments are as in ``create_validation_figures.create_validation_figure``. In addition,
-    panel (a) gets fixed-position interpretive labels, and connected regions where both
-    ground truth and prediction are labeled but disagree are found with
-    ``scipy.ndimage.label``; the two largest (if > 50 pixels) are circled in (b) and (c).
+    panel (a) gets fixed-position interpretive labels, and connected regions where ground
+    truth and prediction differ and neither is 0 are found with ``scipy.ndimage.label``.
+    Ground-truth class 1 (the unscored region above the interpreted interval) is included,
+    so a region can be class-1 area rather than an error among classes 2-5. The two largest
+    (if > 50 pixels) are circled in (b) and (c); the largest is labelled "Misclassified".
     """
     img_height, img_width = seismic.shape
     
@@ -101,8 +104,8 @@ def create_annotated_figure(seismic, ground_truth, prediction, output_path,
     cbar1.ax.tick_params(size=0, labelsize=9)
     cbar_ax1.set_zorder(2)
 
-    # === ANNOTATION (l): Selection criteria ===
-    # 1. Target depth range - bracket on right side using ax.annotate
+    # === Panel (a) annotations at fixed positions: target depth range, fault, chaotic basement ===
+    # 1. Target depth range: bracket just outside the right edge of panel (a), 20-85 % of its height
     depth_start = int(img_height * 0.20)
     depth_end = int(img_height * 0.85)
     
@@ -177,7 +180,7 @@ def create_annotated_figure(seismic, ground_truth, prediction, output_path,
     for spine in ax3.spines.values():
         spine.set_linewidth(spine_width)
 
-    # === ANNOTATION (m): Highlight differences between b and c ===
+    # === Circle the largest regions where (b) and (c) disagree (both non-zero) ===
     diff_mask = (ground_truth != prediction) & (ground_truth != 0) & (prediction != 0)
     
     from scipy import ndimage

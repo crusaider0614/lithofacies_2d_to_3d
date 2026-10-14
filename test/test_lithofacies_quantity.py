@@ -4,8 +4,10 @@ For each model (TDT = 7.5, 12.5, 25.0 m, checkpoints lithofacies_prediction_<TDT
 _049 / _044, i.e. the minimum-validation-loss epochs), every inline and every crossline of
 the validation part of the 3D volume (CF.DATASET.VALID_IDX) is resampled from the 3D trace
 spacing VDT (12.5 m) to the model's TDT, predicted with overlapping 256 x 256 tiles, and
-compared with the facies labels. Metrics are pooled over all lines and reported for
-Basement, Igneous, Shale and Sand; classes 0 (unlabeled) and 1 (unclassified) are excluded.
+compared with the facies labels. Each resampled line is rescaled to RMS 0.15 before
+inference. Metrics are pooled over all lines and reported for Basement, Igneous, Shale and
+Sand; ground-truth classes 0 (unlabeled) and 1 (unclassified) are excluded. A 0/1 prediction
+on a scored pixel counts against recall but does not appear in the 4 x 4 confusion matrix.
 
 Reads:  config/config_lithofacies.yaml, the three checkpoints above under checkpoint/,
         data/<DATA_POOL>/<VOLUME_TAG>.npy, <FACIES_TAG>.npy,
@@ -77,7 +79,7 @@ def predict_section(network, vt, info, device):
     """Predict facies for a full (nz, nt) section with overlapping target_dim tiles.
 
     ``vt`` is the (nz, nt) amplitude section and ``info`` the (2, nz, nt) instantaneous
-    phase/frequency. Tiles overlap by about 50 %; their logits are blended with the
+    phase/frequency. Tiles overlap by at least 50 %; their logits are blended with the
     raised-cosine ``weight`` window before the argmax. Returns (nz, nt) int32 class labels.
     """
     nz, nt = vt.shape

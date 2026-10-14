@@ -7,7 +7,8 @@ a visual check that the tiling produces seamless predictions.
 
 What it does:
   1. Reads the loss history from the epoch-``epoch`` (default 50) checkpoint of ``tag``,
-     prints/plots it, and reloads the minimum-validation-loss checkpoint.
+     prints the best epoch and its validation loss, plots both loss curves, and reloads
+     the minimum-validation-loss checkpoint.
   2. Draws random synthetic lines (trace spacing 25.0 m, hard-coded in the dataset call)
      from the validation part of the 3D volume via ``LithofaciesDataset``.
   3. Shows amplitude | ground truth | prediction | error mask for each line.
@@ -112,7 +113,8 @@ with torch.no_grad():
         nz = vt.shape[2]
         nt = vt.shape[3]
 
-        # Number of tiles along depth (z) and along the line (t): roughly 50 % overlap,
+        # Number of tiles along depth (z) and along the line (t): at least 50 % overlap
+        # (6 x 4 tiles for a 768 x 512 crop),
         # with tile starts spread evenly so the first/last tiles touch the section edges.
         nsz = int((nz - target_dim) / (target_dim // 2)) + 2 if nz > target_dim else 1
         nst = int((nt - target_dim) / (target_dim // 2)) + 2 if nt > target_dim else 1

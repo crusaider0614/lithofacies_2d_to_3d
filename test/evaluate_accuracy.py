@@ -3,14 +3,16 @@
 Evaluates the TDT = 25.0 m model (checkpoint/lithofacies_prediction_25.0_pat_044, the
 minimum-validation-loss epoch) on ``n_samples`` random synthetic 2D lines. Each line is
 extracted from the validation part of the 3D volume (CF.DATASET.VALID_IDX) along a random
-straight line between two boundary points (``extract_random_line``), resampled to 25 m
-trace spacing, and cropped to ``crop_size`` = 768 samples x 512 traces at a random depth
-that contains labels. The crop is predicted with overlapping 256 x 256 tiles
+straight line between two boundary points (``extract_random_line``), resampled to a
+nominal 25 m trace spacing (varied by +/-10 % per line, as in training), and cropped to
+``crop_size`` = 768 samples x 512 traces at a random depth whose window has at least one
+non-zero label. The crop is predicted with overlapping 256 x 256 tiles
 (``predict_section``) and metrics are pooled over all pixels whose ground truth is one of the
 geological classes 2-5 (0 unlabeled and 1 unclassified are excluded, as in
 test_lithofacies_quantity.py).
 Printed: overall accuracy, per-class GT/prediction counts with precision/recall/F1,
-raw and row-normalized confusion matrices, weighted and macro F1.
+raw and row-normalized confusion matrices over classes 2-5 (pixels predicted as 0 or 1 are
+left out of them), weighted and macro F1.
 
 Reads:  config/config_lithofacies.yaml, checkpoint/lithofacies_prediction_25.0_pat_044,
         data/<DATA_POOL>/<VOLUME_TAG>.npy, <FACIES_TAG>.npy,
@@ -30,7 +32,6 @@ import os, random
 import numpy as np
 import torch
 import yacs.config
-from collections import defaultdict
 
 from module.seismic_data import SeismicVolume, Coordinate
 from network.coordi_network import get_gen_model
@@ -110,7 +111,8 @@ with torch.no_grad():
             print('  Processing', idx + 1, '/', n_samples, '...')
         
         # Draw a random line and a random 768-sample depth window; retry until the window
-        # contains at least one labeled pixel. Facies use nearest-neighbour sampling, and the
+        # has at least one non-zero label (class 1 counts, so a window may still contain no
+        # scored class 2-5 pixels). Facies use nearest-neighbour sampling, and the
         # same start/end coordinates are reused for facies and the inst. attributes.
         while True:
             vt, scoordi, ecoordi = extract_random_line(volume_sv, nt, vdt, tdt, mode='bilinear')
@@ -165,7 +167,9 @@ print('PER-CLASS METRICS')
 print('=' * 60)
 
 classes_present = sorted(set(all_gt) | set(all_pred))
-# A class-1 prediction on a scored pixel counts as an error but has no column of its own.
+# Predictions of class 0 or 1 on a scored pixel have no row/column of their own. They count
+# as errors in accuracy, recall and F1, but confusion_matrix(labels=...) drops them, so both
+# confusion matrices (and the row-normalized %) leave those pixels out.
 classes_present = [c for c in classes_present if c >= 2]
 
 # One-vs-rest precision / recall / F1 per class.

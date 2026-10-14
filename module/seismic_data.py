@@ -23,7 +23,11 @@ def add_weighted_avg(average, weight, new_sample, new_weight):
 
 
 class Coordinate:
-    """2D point/vector (cx, cy) with element-wise arithmetic against scalars or other Coordinates."""
+    """2D point/vector (cx, cy) with element-wise arithmetic against Python int/float or other Coordinates.
+
+    Other operand types (e.g. np.float32, np.int64) are not handled: the operation silently
+    returns an unchanged copy.
+    """
 
     def __init__(self, cx, cy):
         self.cx = float(cx)
@@ -91,28 +95,12 @@ def distance(coordi1, coordi2):
     return (((coordi2 - coordi1)**2.0).sum())**0.5
 
 
-class Trace:
-    """A single 1D trace with its map coordinate."""
-
-    def __init__(self, data, coordi):
-        self.data = data
-        self.nz = self.data.shape[0]
-        self.coordi = coordi
-
-    def set_data(self, data):
-        assert len(data.shape) == 1
-        self.data = data
-        self.nz = self.data.shape[0]
-
-    def set_coordi(self, coordi):
-        self.coordi = coordi
-
-
 def detect_stationary_ends(coordi):
     """Slice bounds that drop traces at either end of a 2D line whose coordinates do not move.
 
     coordi: (nt, 2) trace coordinates. A trace counts as moving when it is >= 0.5 coordinate
-    units from its neighbour. Returns (start, end) for data[:, start:end].
+    units from its neighbour. Returns (start, end) for data[:, start:end]. If no trace moves,
+    only the middle trace is kept.
     """
     nt = len(coordi)
 
@@ -135,13 +123,16 @@ def detect_stationary_ends(coordi):
     return start_slice, end_slice
 
 
-# This subroutine must be modified according to the SEG-Y file format.
-# Shell script in the data directory need to be executed before this subroutine to extract .head, .suhead, .su, and .bin files
+# The header byte offsets below must match your SEG-Y/SU files. Needs <tag>.head (text summary;
+# amplitude min/max are parsed from its 13th line), <tag>.suhead (240-byte SU trace headers) and
+# <tag>.bin (raw float32 traces), made beforehand with Seismic Unix; that step is not part of
+# this repository.
 def convert_line_segy_to_numpy(data_pool="southsea", tag=None, is_align_coordi=False, resample=1, sz=None, ez=None):
     """Convert a 2D line, pre-split into .head/.suhead/.bin, to <tag>.npy + <tag>.nphead.
 
     is_align_coordi replaces the trace coordinates by their least-squares straight-line fit;
-    sz/ez crop the sample axis; resample keeps every `resample`-th sample.
+    sz/ez crop the sample axis; resample keeps every `resample`-th sample. Traces at either
+    end whose coordinates do not move are then dropped (detect_stationary_ends).
     The saved array is raw (not divided by amp); amp is only recorded in the sidecar.
     """
     data_root = os.path.join(get_project_root(), "data", data_pool)
@@ -234,8 +225,13 @@ def convert_line_segy_to_numpy(data_pool="southsea", tag=None, is_align_coordi=F
 def convert_2d_segy_to_numpy(data_pool="southsea", tag=None, is_align_coordi=False, rescale=1, sz=None, ez=None):
     """Convert a 2D line read directly from <tag>.segy (or .sgy) with segyio to <tag>.npy + .nphead.
 
-    Trace coordinates come from SourceX/SourceY with the SEG-Y coordinate scalar applied;
-    amp is the maximum absolute amplitude. Other options as in convert_line_segy_to_numpy.
+    Trace coordinates are SourceX/SourceY multiplied by a factor read from the CoordinateUnits
+    trace-header field (bytes 89-90) with SEG-Y scalar rules (negative: divide by |v|;
+    positive: multiply; 0: 1). The standard coordinate scalar field (bytes 71-72) is not read.
+    amp is the maximum absolute amplitude after cropping. is_align_coordi, sz and ez work as in
+    convert_line_segy_to_numpy; rescale keeps every `rescale`-th sample (dz is multiplied).
+    Stationary end traces are not trimmed. The real lines in data/ssealine_matched were made
+    with this function (see __main__ below).
     """
     data_root = os.path.join(get_project_root(), "data", data_pool)
 
@@ -331,7 +327,8 @@ class SeismicLine:
     """2D section data (nz, nt) along a straight line from scoordi (trace 0) to ecoordi (trace nt-1).
 
     tag=None gives an empty 1x1 line to be filled via clean_data/set_coordi. `dp` holds the
-    per-trace weight accumulated by insert_trace_* (weighted stacking of inserted traces).
+    per-trace weight accumulated by insert_trace_idx, which SeismicVolume.get_line uses to
+    write the sampled traces into the line.
     """
 
     def __init__(self, data_pool="southsea", tag=None):
@@ -348,10 +345,9 @@ class SeismicLine:
 
             self.read_nphead(head_path)
             self.data = np.load(data_path)
-            # Scale raw SEG-Y-derived data by the "amp" value from the .nphead
-            # sidecar (written by convert_line_segy_to_numpy). The training
-            # volumes used by LithofaciesDataset are already RMS-normalized (0.15)
-            # and bypass this division on purpose.
+            # Divide by the "amp" value from the .nphead sidecar (written by
+            # convert_line_segy_to_numpy or convert_2d_segy_to_numpy). test/test_actual_line.py
+            # rescales the line to RMS 0.15 afterwards, so this does not affect inference.
             self.data = self.data / self.amp
             if self.shape != self.data.shape:
                 raise ValueError(f"Data shape mismatch: header says {self.shape}, array is {self.data.shape}")
@@ -403,59 +399,12 @@ class SeismicLine:
             self.shape = shape
             self.dp = np.zeros(self.shape[1:], dtype=np.float32)
 
-    def set_amp(self, amp=None):
-        self.amp = amp if amp is not None else np.max(np.abs(self.data))
-        self.data = self.data / self.amp
-
     def set_coordi(self, scoordi=None, ecoordi=None):
         self.scoordi = scoordi if scoordi is not None else self.scoordi
         self.ecoordi = ecoordi if ecoordi is not None else self.ecoordi
 
-    def cut_zaxis(self, sz, ez):
-        rsz = max(sz, 0)
-        rez = min(ez, self.shape[0])
-
-        self.data = self.data[rsz: rez]
-        self.shape = self.data.shape
-
     def idx_to_coordi(self, it):
         return self.scoordi + (self.ecoordi - self.scoordi) * (it / (self.shape[1] - 1))
-
-    def coordi_to_idx(self, coordi):
-        """Project coordi onto the line: returns (fractional trace index, closest point, signed distance)."""
-        grad = self.ecoordi - self.scoordi
-        a = -grad.cy
-        b = grad.cx
-        ab_sqsum = a * a + b * b
-        c = -(a * self.scoordi.cx + b * self.scoordi.cy)
-        distance = (a * coordi.cx + b * coordi.cy + c) / ab_sqsum**0.5
-        closest = Coordinate(
-            (b * (b * coordi.cx - a * coordi.cy) - a * c) / ab_sqsum,
-            (a * (a * coordi.cy - b * coordi.cx) - b * c) / ab_sqsum
-        )
-        if grad.cx != 0:
-            it = (self.shape[1] - 1) * ((closest.cx - self.scoordi.cx) / grad.cx)
-        else:
-            it = (self.shape[1] - 1) * ((closest.cy - self.scoordi.cy) / grad.cy)
-        return it, closest, distance
-
-    def get_trace_idx(self, it):
-        """Trace at fractional index it (linear interpolation); zeros outside the line."""
-        if it < 0 or it > self.shape[1] - 1:
-            trace = np.zeros(self.shape[0], dtype=np.float32)
-        else:
-            if abs(round(it) - it) < 0.01:
-                trace = self.data[:, int(round(it))]
-            else:
-                portion = it - np.floor(it)
-                pre_trace = self.data[:, int(np.floor(it))]
-                pro_trace = self.data[:, int(np.ceil(it))]
-                trace = portion * pro_trace + (1.0 - portion) * pre_trace
-        return trace
-
-    def get_trace_coordi(self, coordi):
-        it, _, _ = self.coordi_to_idx(coordi)
-        return self.get_trace_idx(it)
 
     def insert_trace_idx(self, new_trace, it):
         """Stack new_trace at fractional index it, split linearly between the two neighbouring traces."""
@@ -479,23 +428,14 @@ class SeismicLine:
                 self.data[:, int(np.ceil(it))] = add_weighted_avg(pro_trace, pro_weight, new_trace, portion)
                 self.dp[int(np.ceil(it))] += portion
 
-    def insert_trace_coordi(self, new_trace, coordi, max_distance=10.0):
-        """Stack new_trace at the projection of coordi if its distance to the line is < max_distance."""
-        it, _, distance = self.coordi_to_idx(coordi)
-        # coordi_to_idx returns a signed distance (negative on one side of the line).
-        if abs(distance) < max_distance:
-            self.insert_trace_idx(new_trace, it)
-        else:
-            print("Too far distance: ", distance)
 
-
-# This subroutine must be modified according to the SEG-Y file format.
-# Shell script in the data directory need to be executed before this subroutine to extract .head, .suhead, .su, and .bin files
+# Same input files and header-offset caveats as convert_line_segy_to_numpy.
 def convert_volume_segy_to_numpy(data_pool="southsea", tag=None, is_align_coordi=False, rescale=1, sz=None, ez=None):
     """Convert a 3D volume, pre-split into .head/.suhead/.bin, to <tag>.npy (nz, nx, ny) + .nphead.
 
     is_align_coordi replaces the trace coordinates by a least-squares bilinear fit of the four
-    corners. Saved raw, as in convert_line_segy_to_numpy.
+    corners. sz/ez crop the sample axis and rescale keeps every `rescale`-th sample (dz is
+    multiplied), like resample in convert_line_segy_to_numpy. Saved raw, as there.
     """
     data_root = os.path.join(get_project_root(), "data", data_pool)
     suhead_path = os.path.join(data_root, tag + ".suhead")
@@ -631,14 +571,13 @@ class SeismicVolume:
 
             self.read_nphead(head_path)
             self.data = np.load(data_path)
-            # Scale raw SEG-Y-derived data by the "amp" value from the .nphead
-            # sidecar (written by convert_volume_segy_to_numpy). The training
-            # volumes used by LithofaciesDataset are already RMS-normalized (0.15)
-            # and bypass this division on purpose.
+            # Divide by the "amp" value from the .nphead sidecar (written by
+            # convert_volume_segy_to_numpy). The training volumes used by
+            # LithofaciesDataset are already RMS-normalized (0.15) offline and are loaded
+            # directly with np.load, so they never go through this division.
             self.data = self.data / self.amp
             if self.shape != self.data.shape:
                 raise ValueError(f"Data shape mismatch: header says {self.shape}, array is {self.data.shape}")
-            self.dp = np.ones(self.shape[1:], dtype=np.float32)
 
     def read_nphead(self, header_path):
         """Parse a volume .nphead; corner_coordi is a least-squares bilinear fit to the trace coordinates."""
@@ -690,15 +629,9 @@ class SeismicVolume:
     def clean_data(self, shape=None):
         if shape is None:
             self.data[:, :, :] = 0.0
-            self.dp = np.zeros(self.shape[1:], dtype=np.float32)
         else:
             self.data = np.zeros(shape, dtype=np.float32)
             self.shape = shape
-            self.dp = np.zeros(self.shape[1:], dtype=np.float32)
-
-    def set_amp(self, amp=None):
-        self.amp = amp if amp is not None else np.max(np.abs(self.data))
-        self.data = self.data / self.amp
 
     def set_coordi(self, sscoordi=None, secoordi=None, escoordi=None, eecoordi=None):
         self.corner_coordi[0][0] = sscoordi if sscoordi is not None else self.corner_coordi[0][0]
@@ -706,28 +639,12 @@ class SeismicVolume:
         self.corner_coordi[1][0] = escoordi if escoordi is not None else self.corner_coordi[1][0]
         self.corner_coordi[1][1] = eecoordi if eecoordi is not None else self.corner_coordi[1][1]
 
-    def cut_zaxis(self, sz, ez):
-        rsz = max(sz, 0)
-        rez = min(ez, self.shape[0])
-
-        self.data = self.data[rsz: rez]
-        self.shape = self.data.shape
-
-    def idx_to_coordi(self, ix, iy):
-        x_portion = ix / (self.shape[1] - 1)
-        y_portion = iy / (self.shape[2] - 1)
-        out_coordi = (
-            self.corner_coordi[0][0] * (1.0 - x_portion) * (1.0 - y_portion) +
-            self.corner_coordi[0][1] * (1.0 - x_portion) * y_portion +
-            self.corner_coordi[1][0] * x_portion * (1.0 - y_portion) +
-            self.corner_coordi[1][1] * x_portion * y_portion
-        )
-        return out_coordi
-
     def coordi_to_idx(self, coordi):
         """Fractional grid indices (ix, iy) of coordi, inverting the bilinear corner mapping.
 
-        Each axis is a quadratic in the unknown fraction; the root closest to 0.5 is taken.
+        For each axis the fraction u solves q2*u^2 + q1*u + q0 = 0. If q2 > 1e-5 the root
+        closest to 0.5 is taken; otherwise the linear solution -q0/q1 is used, which is exact
+        for parallelograms (including the grid-index corners used throughout this repo).
         """
         coeff_1x = self.corner_coordi[1][1] - self.corner_coordi[1][0] - self.corner_coordi[0][1] + self.corner_coordi[0][0]
         coeff_1c = self.corner_coordi[0][1] - self.corner_coordi[0][0]
@@ -819,69 +736,6 @@ class SeismicVolume:
             iy = round(iy)
         return self.get_trace_idx(ix, iy)
 
-    def insert_trace_idx(self, new_trace, ix, iy):
-        """Stack new_trace at fractional (ix, iy), split bilinearly between the four neighbouring traces."""
-        assert len(new_trace) == self.shape[0]
-        if 0 <= ix <= self.shape[1] - 1 and 0 <= iy <= self.shape[2] - 1:
-            if abs(round(ix) - ix) < 0.01:
-                if abs(round(iy) - iy) < 0.01:
-                    trace = self.data[:, int(round(ix)), int(round(iy))]
-                    weight = self.dp[int(round(ix)), int(round(iy))]
-                    self.data[:, int(round(ix)), int(round(iy))] = add_weighted_avg(trace, weight, new_trace, 1.0)
-                    self.dp[int(round(ix)), int(round(iy))] += 1.0
-                else:
-                    portion = iy - np.floor(iy)
-
-                    pre_trace = self.data[:, int(round(ix)), int(np.floor(iy))]
-                    pre_weight = self.dp[int(round(ix)), int(np.floor(iy))]
-                    self.data[:, int(round(ix)), int(np.floor(iy))] = add_weighted_avg(pre_trace, pre_weight, new_trace, 1.0 - portion)
-                    self.dp[int(round(ix)), int(np.floor(iy))] += 1.0 - portion
-
-                    pro_trace = self.data[:, int(round(ix)), int(np.ceil(iy))]
-                    pro_weight = self.dp[int(round(ix)), int(np.ceil(iy))]
-                    self.data[:, int(round(ix)), int(np.ceil(iy))] = add_weighted_avg(pro_trace, pro_weight, new_trace, portion)
-                    self.dp[int(round(ix)), int(np.ceil(iy))] += portion
-            else:
-                if abs(round(iy) - iy) < 0.01:
-                    portion = ix - np.floor(ix)
-
-                    pre_trace = self.data[:, int(np.floor(ix)), int(round(iy))]
-                    pre_weight = self.dp[int(np.floor(ix)), int(round(iy))]
-                    self.data[:, int(np.floor(ix)), int(round(iy))] = add_weighted_avg(pre_trace, pre_weight, new_trace, 1.0 - portion)
-                    self.dp[int(np.floor(ix)), int(round(iy))] += 1.0 - portion
-
-                    pro_trace = self.data[:, int(np.ceil(ix)), int(round(iy))]
-                    pro_weight = self.dp[int(np.ceil(ix)), int(round(iy))]
-                    self.data[:, int(np.ceil(ix)), int(round(iy))] = add_weighted_avg(pro_trace, pro_weight, new_trace, portion)
-                    self.dp[int(np.ceil(ix)), int(round(iy))] += portion
-                else:
-                    x_portion = ix - np.floor(ix)
-                    y_portion = iy - np.floor(iy)
-
-                    prepre_trace = self.data[:, int(np.floor(ix)), int(np.floor(iy))]
-                    prepre_weight = self.dp[int(np.floor(ix)), int(np.floor(iy))]
-                    self.data[:, int(np.floor(ix)), int(np.floor(iy))] = add_weighted_avg(prepre_trace, prepre_weight, new_trace, (1.0 - x_portion) * (1.0 - y_portion))
-                    self.dp[int(np.floor(ix)), int(np.floor(iy))] += (1.0 - x_portion) * (1.0 - y_portion)
-
-                    prepro_trace = self.data[:, int(np.floor(ix)), int(np.ceil(iy))]
-                    prepro_weight = self.dp[int(np.floor(ix)), int(np.ceil(iy))]
-                    self.data[:, int(np.floor(ix)), int(np.ceil(iy))] = add_weighted_avg(prepro_trace, prepro_weight, new_trace, (1.0 - x_portion) * y_portion)
-                    self.dp[int(np.floor(ix)), int(np.ceil(iy))] += (1.0 - x_portion) * y_portion
-
-                    propre_trace = self.data[:, int(np.ceil(ix)), int(np.floor(iy))]
-                    propre_weight = self.dp[int(np.ceil(ix)), int(np.floor(iy))]
-                    self.data[:, int(np.ceil(ix)), int(np.floor(iy))] = add_weighted_avg(propre_trace, propre_weight, new_trace, x_portion * (1.0 - y_portion))
-                    self.dp[int(np.ceil(ix)), int(np.floor(iy))] += x_portion * (1.0 - y_portion)
-
-                    propro_trace = self.data[:, int(np.ceil(ix)), int(np.ceil(iy))]
-                    propro_weight = self.dp[int(np.ceil(ix)), int(np.ceil(iy))]
-                    self.data[:, int(np.ceil(ix)), int(np.ceil(iy))] = add_weighted_avg(propro_trace, propro_weight, new_trace, x_portion * y_portion)
-                    self.dp[int(np.ceil(ix)), int(np.ceil(iy))] += x_portion * y_portion
-
-    def insert_trace_coordi(self, new_trace, coordi):
-        ix, iy = self.coordi_to_idx(coordi)
-        self.insert_trace_idx(new_trace, ix, iy)
-
     def get_line(self, line, mode="bilinear"):
         """Fill a SeismicLine by sampling this volume at each of its trace coordinates."""
         for it in range(line.shape[1]):
@@ -891,9 +745,11 @@ class SeismicVolume:
         return line
 
     def get_line_coordi(self, scoordi, ecoordi, nt, mode="bilinear"):
-        """Sample nt equally spaced traces along the straight line scoordi -> ecoordi (grid-index coordinates).
+        """Sample nt equally spaced traces along the straight line scoordi -> ecoordi; returns a SeismicLine.
 
-        mode="nearest" snaps to the nearest trace, used for categorical facies volumes.
+        Endpoints are in the coordinate system of corner_coordi: grid indices (ix, iy) when the
+        corners are set to the grid corners, as all callers in this repo do. mode="nearest"
+        snaps to the nearest trace, used for categorical facies volumes.
         """
         line = SeismicLine(tag=None)
         line.clean_data(shape=(self.shape[0], nt))

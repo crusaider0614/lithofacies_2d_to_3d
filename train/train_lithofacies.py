@@ -1,9 +1,14 @@
 """Train InfoUNet for lithofacies prediction on synthetic 2D lines cut from the 3D volume.
 
-Reads config/config_lithofacies.yaml (edit `main(...)` below to use another file), trains with
-DistributedDataParallel on CF.GPUS, and saves the full training state every CF.TRAIN.CHECK_EPOCH
-epochs to checkpoint/<CF.TAG>_<epoch:03d> (network, optimizer, lr_scheduler, train_loss and
-valid_loss histories). Set CF.DATASET.TDT to train the model for a given 2D trace spacing.
+Reads config/config_lithofacies.yaml (edit `main(...)` below to use another file) and spawns one
+process per GPU in CF.GPUS. An NCCL process group is always initialized, so CUDA GPUs are
+required even for a single GPU (DEVICE: "cpu" does not work); the model is wrapped in
+DistributedDataParallel when more than one GPU is listed. The full training state is saved every
+CF.TRAIN.CHECK_EPOCH epochs to checkpoint/<CF.TAG>_<epoch:03d> (1-based epoch; network,
+optimizer, lr_scheduler, and the train_loss / valid_loss histories: train_loss is rank 0's
+bias-corrected EMA of the batch losses at the end of each epoch, valid_loss the mean over all
+validation batches of all ranks). Set CF.DATASET.TDT and CF.TAG together to train the model for
+a given 2D trace spacing.
 Run from the repository root: python -m train.train_lithofacies
 """
 import time
@@ -54,18 +59,13 @@ def _train(rank, world_size, CF):
         print("Tag:", tag)
     cudnn.benchmark = CF.CUDNN_BENCHMARK
     is_parallel = False
-    if CF.DEVICE == "cpu":
-        device = torch.device("cpu")
-    elif CF.DEVICE == "cuda":
-        if len(CF.GPUS) == 1:
-            device = torch.device("cuda:" + str(CF.GPUS[0]))
-        elif len(CF.GPUS) > 1:
-            is_parallel = True
-            device = torch.device("cuda")
-            torch.cuda.set_device(rank)
-        else:
+    if CF.DEVICE == "cuda":
+        if len(CF.GPUS) == 0:
             raise ValueError(f"CF.GPUS must be non-empty when CF.DEVICE == 'cuda', got: {CF.GPUS}")
-    else:
+        if len(CF.GPUS) > 1:
+            is_parallel = True
+            torch.cuda.set_device(rank)
+    elif CF.DEVICE != "cpu":
         raise ValueError(f"Unsupported CF.DEVICE: {CF.DEVICE!r} (expected 'cpu' or 'cuda')")
 
     if rank == 0:
@@ -132,10 +132,12 @@ def _train(rank, world_size, CF):
     if is_parallel:
         network = DDP(network, device_ids=[rank], find_unused_parameters=True)
 
-    # Loss = class-weighted cross-entropy + 0.1 * Dice. Classes: 0 unlabeled (ignored),
-    # 1 unclassified region outside the interpreted interval (weight 0 and excluded from
-    # Dice, so it never contributes to the loss), 2 basement, 3 igneous (both up-weighted
-    # x2), 4 shale, 5 sand.
+    # Loss = class-weighted cross-entropy (label smoothing 0.1 in training, 0 in validation)
+    # + 0.1 * Dice. Classes: 0 unlabeled (ignore_index; no contribution to either term),
+    # 1 unclassified region above the interpreted interval (cross-entropy weight 0 and left
+    # out of the Dice class average, but its pixels still enter the training label-smoothing
+    # term and act as negatives in the Dice terms of classes 2-5), 2 basement, 3 igneous
+    # (both up-weighted x2), 4 shale, 5 sand.
     class_weight = torch.tensor([0.0, 0.0, 2.0, 2.0, 1.0, 1.0], dtype=torch.float32)
     train_criterion = nn.CrossEntropyLoss(ignore_index=0, weight=class_weight, label_smoothing=0.1).to(rank)
     valid_criterion = nn.CrossEntropyLoss(ignore_index=0, weight=class_weight, label_smoothing=0.0).to(rank)
@@ -147,7 +149,10 @@ def _train(rank, world_size, CF):
 
     train_losses = []
     valid_losses = []
-    # Resume from checkpoint/<PRETRAIN.TAG>_<LOAD_EPOCH>, including the loss histories.
+    # Resume from checkpoint/<PRETRAIN.TAG>_<LOAD_EPOCH:03d>: network weights and loss histories
+    # always, optimizer / LR-scheduler state only if PRETRAIN.LOAD_OPTIMIZER. TRAIN.BEGIN_EPOCH
+    # is not derived from LOAD_EPOCH; set it to LOAD_EPOCH yourself, otherwise epoch numbers,
+    # checkpoint names and the loss history are off.
     if CF.PRETRAIN.LOAD:
         load_tag = CF.PRETRAIN.TAG
         state = torch.load(os.path.join(get_project_root(), "checkpoint", load_tag + "_" + str(CF.PRETRAIN.LOAD_EPOCH).zfill(3)), map_location=lambda storage, loc: storage, weights_only=True)
@@ -172,8 +177,9 @@ def _train(rank, world_size, CF):
         start_time = time.time()
 
         # Training
-        # DistributedSampler shuffles using seed + epoch; without this, every
-        # epoch would use the exact same shuffle order.
+        # set_epoch only reseeds the sampler's index permutation. LithofaciesDataset ignores
+        # the index and draws a fresh random line on every call, so this does not change
+        # which samples are seen (kept as the standard DDP pattern).
         train_sampler.set_epoch(i_epoch)
         avg_train_loss.initialize()
         network.train()
