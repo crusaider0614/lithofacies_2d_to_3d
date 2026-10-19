@@ -18,12 +18,14 @@ config/
 module/
   dataset.py                    LithofaciesDataset: random synthetic 2D lines from the 3D volume
   seismic_data.py               SeismicLine / SeismicVolume containers, SEG-Y -> .npy conversion
+  matching_filter.py            Zero-phase wavelet estimation and least-squares shaping filter
 network/
   coordi_network.py             InfoUNet and DiceLoss
   info_module.py                Concatenation of the auxiliary info channels
 utils/                          Paths, DDP helpers, weight init, I/O and plotting helpers
 process/
   compute_inst_attribute.py     Precompute the instantaneous phase / frequency volumes
+  match_2d_to_canonical.py      Match the real 2D lines to a canonical 3D wavelet (SEG-Y)
 train/
   train_lithofacies.py          Training (DistributedDataParallel)
 test/
@@ -33,6 +35,7 @@ test/
   create_validation_figures.py  Seismic / label / prediction figures for random synthetic lines
   create_annotated_figure.py    Annotated example figure
   test_actual_line.py           Inference on real 2D lines
+  seismic_matching_filter.py    Matching filter on co-located 3D / 2D lines (Fig. 14)
   test_lithofacies.py, test_lithofacies_quality.py   Visual checks on synthetic lines
 ```
 
@@ -162,7 +165,29 @@ lists the three released lines by file name, with the trace window used for each
 python -m test.test_actual_line
 ```
 The model is chosen from each line's trace spacing, and the prediction is shown above the
-amplitude section.
+amplitude section. The released lines have already been matched to the 3D data (see below).
+
+**Preparing real 2D lines from SEG-Y** (the SEG-Y data are not distributed):
+
+1. Match the frequency content of each 2D line to a canonical wavelet derived from sections of
+   the 3D volume (`data/matching_filter/line1_3d.segy`, `line2_3d.segy`); the 2D lines are read
+   from `data/ssealine/` and the matched lines and diagnostics are written to
+   `data/ssealine_matched/`:
+   ```bash
+   python -m process.match_2d_to_canonical
+   ```
+2. Convert the matched lines to `<name>.npy` + `<name>.nphead` (every second sample is kept):
+   ```bash
+   python -m module.seismic_data
+   ```
+   Then point `test/test_actual_line.py` to `data/ssealine_matched/` and list the lines in
+   `line_range`.
+3. Fig. 14 (the matching filter on co-located 3D and 2D lines,
+   `data/matching_filter/line{1,2}_{3d,2d}.segy`; written to
+   `test/validation_figures/matching_filter/`):
+   ```bash
+   python -m test.seismic_matching_filter
+   ```
 
 **With a labeled 3D volume** (not distributed):
 
